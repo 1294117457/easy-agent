@@ -1,27 +1,28 @@
 # Step 3: LLM 对话
 
-> 版本: v0.1.0 MVP
+> 版本: v0.2.0 MVP
 > 日期: 2026-05-26
 > 前置：Step 2 Storage 已完成
 > 目标：能调用 OpenAI API，AI 能回复
+> 架构: electron-vite，文件位于 `electron/core/`
 
 ---
 
 ## 1. 安装依赖
 
 ```bash
-cd electron
-
 npm install @langchain/langgraph @langchain/core @langchain/openai
 ```
 
+---
+
 ## 2. 创建 ports/llm.port.ts
 
+**`electron/core/ports/llm.port.ts`**：
+
 ```typescript
-// electron/core/ports/llm.port.ts
 import type { BaseMessage } from '@langchain/core/messages';
 
-// LLM 返回结果
 export interface LLMResponse {
   content: string;
   usage?: {
@@ -31,15 +32,10 @@ export interface LLMResponse {
   };
 }
 
-// LLM 端口接口
 export interface ILLMPort {
   readonly provider: string;
   readonly model: string;
-
-  // 普通调用
   invoke(messages: BaseMessage[]): Promise<LLMResponse>;
-
-  // 流式调用
   invokeStream(
     messages: BaseMessage[],
     onChunk: (chunk: string) => void
@@ -47,13 +43,16 @@ export interface ILLMPort {
 }
 ```
 
-## 3. 创建 adapters/http/openai.adapter.ts
+---
+
+## 3. 创建 adapters/llm/openai.adapter.ts
+
+**`electron/core/adapters/llm/openai.adapter.ts`**：
 
 ```typescript
-// electron/core/adapters/http/openai.adapter.ts
 import { ChatOpenAI } from '@langchain/openai';
 import type { BaseMessage } from '@langchain/core/messages';
-import type { ILLMPort, LLMResponse } from '../../../ports/llm.port.js';
+import type { ILLMPort, LLMResponse } from '../../ports/llm.port.js';
 
 export class OpenAIAdapter implements ILLMPort {
   readonly provider = 'openai';
@@ -90,14 +89,17 @@ export class OpenAIAdapter implements ILLMPort {
 }
 ```
 
+---
+
 ## 4. 创建 application/AgentService.ts
 
+**`electron/core/application/AgentService.ts`**：
+
 ```typescript
-// electron/core/application/AgentService.ts
 import { HumanMessage, AIMessage, SystemMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import type { ILLMPort } from '../ports/llm.port.js';
-import type { IStoragePort } from '../ports/storage.port.js';
+import type { ILLMPort } from '../../ports/llm.port.js';
+import type { IStoragePort } from '../../ports/storage.port.js';
 
 export interface SendMessageCallbacks {
   onToken: (token: string) => void;
@@ -116,14 +118,12 @@ export class AgentService {
     userInput: string,
     callbacks: SendMessageCallbacks
   ) {
-    // 1. 保存用户消息
     this.storagePort.appendMessage({
       conversationId,
       role: 'user',
       content: userInput,
     });
 
-    // 2. 加载对话历史
     const history = this.storagePort.getMessages(conversationId);
     const langchainMessages: BaseMessage[] = history.map((m) =>
       m.role === 'user'
@@ -131,23 +131,21 @@ export class AgentService {
         : new AIMessage(m.content)
     );
 
-    // 3. 获取 System Prompt（如果有）
     const prompts = this.storagePort.listPrompts();
-    const systemPrompt = prompts[0]?.systemPrompt || '你是 EasyAgent，智能助手。';
+    const systemPrompt =
+      prompts[0]?.systemPrompt || '你是 EasyAgent，智能助手。';
     const allMessages: BaseMessage[] = [
       new SystemMessage(systemPrompt),
       ...langchainMessages,
       new HumanMessage(userInput),
     ];
 
-    // 4. 调用 LLM
     try {
       const result = await this.llmPort.invokeStream(
         allMessages,
         callbacks.onToken
       );
 
-      // 5. 保存 AI 回复
       this.storagePort.appendMessage({
         conversationId,
         role: 'assistant',
@@ -156,41 +154,46 @@ export class AgentService {
       });
 
       callbacks.onDone();
-    } catch (err: any) {
-      callbacks.onError(err.message);
+    } catch (err: unknown) {
+      callbacks.onError(err instanceof Error ? err.message : String(err));
     }
   }
 }
 ```
 
+---
+
 ## 5. 更新 core/index.ts
 
+**`electron/core/index.ts`**：
+
 ```typescript
-// electron/core/index.ts
 import type { ILLMPort } from './ports/llm.port.js';
 import type { IStoragePort } from './ports/storage.port.js';
 import { AgentService } from './application/AgentService.js';
-import { OpenAIAdapter } from './adapters/http/openai.adapter.js';
+import { OpenAIAdapter } from './adapters/llm/openai.adapter.js';
 
 export class EasyAgentCore {
   private llmPort: ILLMPort;
   private storagePort: IStoragePort;
   private agentService: AgentService;
 
-  constructor(storagePort: IStoragePort) {
-    this.storagePort = storagePort;
+  constructor(storage: IStoragePort) {
+    this.storagePort = storage;
 
-    // 从 Storage 获取 API Key 并初始化 LLM
     const keys = this.storagePort.listApiKeys();
     const activeKey = keys.find((k) => k.enabled) || keys[0];
 
     if (!activeKey) {
-      throw new Error('请先配置 API Key');
+      console.warn('No API Key configured. Please add one in settings.');
+      this.llmPort = null as unknown as ILLMPort;
+      this.agentService = null as unknown as AgentService;
+      return;
     }
 
     const decryptedKey = this.storagePort.getDecryptedKey(activeKey.id);
     if (!decryptedKey) {
-      throw new Error('API Key 解密失败');
+      throw new Error('Failed to decrypt API Key');
     }
 
     this.llmPort = new OpenAIAdapter(activeKey.model, decryptedKey);
@@ -213,8 +216,9 @@ export class EasyAgentCore {
     return this.storagePort;
   }
 
-  getLLM(): ILLMPort {
-    return this.llmPort;
+  reloadLLM(model: string, apiKey: string) {
+    this.llmPort = new OpenAIAdapter(model, apiKey);
+    this.agentService = new AgentService(this.llmPort, this.storagePort);
   }
 }
 
@@ -224,76 +228,14 @@ export type { SendMessageCallbacks } from './application/AgentService.js';
 export * from './domain/types.js';
 ```
 
-## 6. 更新 main.ts
+---
 
-```typescript
-// electron/main.ts
-import { app, BrowserWindow } from 'electron';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import { EasyAgentCore } from './core/index.js';
-import { SQLiteAdapter } from './core/adapters/storage/sqlite.adapter.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-let mainWindow: BrowserWindow;
-let core: EasyAgentCore;
-
-function getDbPath() {
-  const base = app.getPath('userData');
-  return path.join(base, 'data', 'easy-agent.db');
-}
-
-async function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-
-  if (process.env.NODE_ENV === 'development') {
-    mainWindow.loadURL('http://localhost:5173');
-    mainWindow.webContents.openDevTools();
-  } else {
-    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
-  }
-}
-
-app.whenReady().then(async () => {
-  // 初始化 Storage
-  const storage = new SQLiteAdapter(getDbPath(), 'easy-agent-master-key');
-
-  // 初始化 Core（此时会读取 API Key 并初始化 LLM）
-  core = new EasyAgentCore(storage);
-
-  await createWindow();
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
-});
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
-
-// 导出 core 供 IPC 使用（临时方案，后续用 IPC）
-(globalThis as any).core = core;
-```
-
-## 7. 验证
+## 6. 验证
 
 ### 先确保有 API Key
 
 ```javascript
-// DevTools 中
 const storage = core.getStorage();
-
-// 如果没有，先添加
 storage.createApiKey({
   provider: 'openai',
   key: 'sk-your-actual-api-key',  // 替换成真实 key
@@ -304,16 +246,13 @@ storage.createApiKey({
 ### 测试对话
 
 ```javascript
-// DevTools 中
-
-// 收集 token
 let response = '';
 core.sendMessage(
-  'test-conv-id',  // 随便一个 id
+  'test-conv-id',
   '你好',
   {
-    onToken: (token) => { response += token; console.log(token); },
-    onDone: () => { console.log('\n完成！完整回复：', response); },
+    onToken: (token) => { response += token; process.stdout.write(token); },
+    onDone: () => { console.log('\n完成！'); },
     onError: (err) => { console.error('错误：', err); }
   }
 );
@@ -327,10 +266,9 @@ core.sendMessage(
   好
   ，
   我
-  是
   ...
 
-  完成！完整回复： 你好！有什么可以帮你的？
+  完成！
 ```
 
 ---
@@ -339,11 +277,10 @@ core.sendMessage(
 
 ```
 ✅ @langchain/openai 已安装
-✅ ports/llm.port.ts 已创建
-✅ adapters/http/openai.adapter.ts 已创建
-✅ application/AgentService.ts 已创建
-✅ core/index.ts 已更新（组合 LLM + Storage + AgentService）
-✅ main.ts 已更新（创建 EasyAgentCore）
+✅ electron/core/ports/llm.port.ts 已创建
+✅ electron/core/adapters/llm/openai.adapter.ts 已创建
+✅ electron/core/application/AgentService.ts 已创建
+✅ electron/core/index.ts 已更新
 ✅ sendMessage 能调用 OpenAI
 ✅ 回调 onToken 能逐字收到回复
 ✅ 消息能保存到数据库
@@ -351,4 +288,4 @@ core.sendMessage(
 
 ---
 
-*文档版本: v0.1.0 | 最后更新: 2026-05-26*
+*文档版本: v0.2.0 | 最后更新: 2026-05-26*

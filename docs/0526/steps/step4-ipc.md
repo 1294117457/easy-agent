@@ -1,37 +1,37 @@
 # Step 4: IPC 打通
 
-> 版本: v0.1.0 MVP
+> 版本: v0.2.0 MVP
 > 日期: 2026-05-26
 > 前置：Step 3 LLM 对话已完成
 > 目标：前端通过 IPC 调用 Core，Core 返回结果，前端渲染响应
+> 架构: electron-vite，electron/ 目录（主进程）+ src/ 目录（渲染进程）
 
 ---
 
 ## 1. 创建 ipc/chat.handler.ts
 
+**`electron/ipc/chat.handler.ts`**：
+
 ```typescript
-// electron/ipc/chat.handler.ts
-import type { IpcMainInvokeEvent } from 'electron';
+import type { IpcMain, BrowserWindow } from 'electron';
 import type { EasyAgentCore } from '../core/index.js';
 
 export function registerChatHandlers(
-  ipcMain: any,
+  ipcMain: IpcMain,
   core: EasyAgentCore,
-  mainWindow: any
+  mainWindow: BrowserWindow
 ) {
-  // 发送消息
   ipcMain.handle(
     'chat:send',
-    async (_event: IpcMainInvokeEvent, conversationId: string, message: string) => {
-      return new Promise((resolve, reject) => {
+    async (_, conversationId: string, message: string) => {
+      return new Promise<void>((resolve, reject) => {
         core.sendMessage(conversationId, message, {
           onToken: (token) => {
-            // 推送 token 到渲染进程
             mainWindow.webContents.send('agent:token', token);
           },
           onDone: () => {
             mainWindow.webContents.send('agent:done', null);
-            resolve(null);
+            resolve();
           },
           onError: (error: string) => {
             mainWindow.webContents.send('agent:error', error);
@@ -42,40 +42,38 @@ export function registerChatHandlers(
     }
   );
 
-  // 获取对话历史
-  ipcMain.handle('chat:history', (_event: IpcMainInvokeEvent, conversationId: string) => {
+  ipcMain.handle('chat:history', (_, conversationId: string) => {
     return core.getStorage().getMessages(conversationId);
   });
 
-  // 获取所有对话列表
   ipcMain.handle('chat:conversations', () => {
     return core.getStorage().listConversations();
   });
 
-  // 创建新对话
   ipcMain.handle('chat:new', () => {
     return core.getStorage().createConversation({ name: '新对话' });
   });
 
-  // 删除对话
-  ipcMain.handle('chat:delete', (_event: IpcMainInvokeEvent, conversationId: string) => {
+  ipcMain.handle('chat:delete', (_, conversationId: string) => {
     return core.getStorage().deleteConversation(conversationId);
   });
 }
 ```
 
+---
+
 ## 2. 创建 ipc/config.handler.ts
 
+**`electron/ipc/config.handler.ts`**：
+
 ```typescript
-// electron/ipc/config.handler.ts
-import type { IpcMainInvokeEvent } from 'electron';
+import type { IpcMain } from 'electron';
 import type { IStoragePort } from '../core/index.js';
 
 export function registerConfigHandlers(
-  ipcMain: any,
+  ipcMain: IpcMain,
   storage: IStoragePort
 ) {
-  // 获取所有配置
   ipcMain.handle('config:get', () => {
     return {
       apiKeys: storage.listApiKeys(),
@@ -83,139 +81,120 @@ export function registerConfigHandlers(
     };
   });
 
-  // 添加 API Key
   ipcMain.handle(
     'config:apiKey:create',
-    (_event: IpcMainInvokeEvent, data: { provider: string; key: string; model: string }) => {
+    (_, data: { provider: string; key: string; model: string }) => {
       return storage.createApiKey(data);
     }
   );
 
-  // 删除 API Key
-  ipcMain.handle('config:apiKey:delete', (_event: IpcMainInvokeEvent, id: string) => {
+  ipcMain.handle('config:apiKey:delete', (_, id: string) => {
     return storage.deleteApiKey(id);
   });
 
-  // 创建 Prompt
   ipcMain.handle(
     'config:prompt:create',
-    (_event: IpcMainInvokeEvent, data: { name: string; description?: string; systemPrompt: string }) => {
+    (_, data: { name: string; description?: string; systemPrompt: string }) => {
       return storage.createPrompt(data);
     }
   );
 
-  // 删除 Prompt
-  ipcMain.handle('config:prompt:delete', (_event: IpcMainInvokeEvent, id: string) => {
+  ipcMain.handle('config:prompt:delete', (_, id: string) => {
     return storage.deletePrompt(id);
   });
 }
 ```
 
-## 3. 更新 preload.ts
+---
+
+## 3. 更新 electron/preload.ts
+
+**`electron/preload.ts`**：
 
 ```typescript
-// electron/preload.ts
 import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  // ========== 对话 ==========
+  ping: () => 'pong',
+
+  // 对话
   sendMessage: (conversationId: string, message: string) =>
     ipcRenderer.invoke('chat:send', conversationId, message),
-
   getHistory: (conversationId: string) =>
     ipcRenderer.invoke('chat:history', conversationId),
-
-  getConversations: () =>
-    ipcRenderer.invoke('chat:conversations'),
-
-  newConversation: () =>
-    ipcRenderer.invoke('chat:new'),
-
+  getConversations: () => ipcRenderer.invoke('chat:conversations'),
+  newConversation: () => ipcRenderer.invoke('chat:new'),
   deleteConversation: (conversationId: string) =>
     ipcRenderer.invoke('chat:delete', conversationId),
 
-  // ========== 配置 ==========
-  getConfig: () =>
-    ipcRenderer.invoke('config:get'),
-
+  // 配置
+  getConfig: () => ipcRenderer.invoke('config:get'),
   createApiKey: (data: { provider: string; key: string; model: string }) =>
     ipcRenderer.invoke('config:apiKey:create', data),
-
-  deleteApiKey: (id: string) =>
-    ipcRenderer.invoke('config:apiKey:delete', id),
-
+  deleteApiKey: (id: string) => ipcRenderer.invoke('config:apiKey:delete', id),
   createPrompt: (data: { name: string; description?: string; systemPrompt: string }) =>
     ipcRenderer.invoke('config:prompt:create', data),
+  deletePrompt: (id: string) => ipcRenderer.invoke('config:prompt:delete', id),
 
-  deletePrompt: (id: string) =>
-    ipcRenderer.invoke('config:prompt:delete', id),
-
-  // ========== 事件推送 ==========
+  // 事件推送
   onToken: (callback: (token: string) => void) =>
     ipcRenderer.on('agent:token', (_, token) => callback(token)),
-
   onDone: (callback: () => void) =>
     ipcRenderer.on('agent:done', () => callback()),
-
   onError: (callback: (error: string) => void) =>
     ipcRenderer.on('agent:error', (_, error) => callback(error)),
 });
 ```
 
-## 4. 更新 main.ts
+---
+
+## 4. 更新 electron/main.ts
+
+**`electron/main.ts`**（添加 IPC 注册调用）：
 
 ```typescript
-// electron/main.ts
 import { app, BrowserWindow, ipcMain } from 'electron';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { EasyAgentCore } from './core/index.js';
 import { SQLiteAdapter } from './core/adapters/storage/sqlite.adapter.js';
 import { registerChatHandlers } from './ipc/chat.handler.js';
 import { registerConfigHandlers } from './ipc/config.handler.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+let mainWindow: BrowserWindow | null = null;
+let core: EasyAgentCore | null = null;
 
-let mainWindow: BrowserWindow;
-let core: EasyAgentCore;
-
-function getDbPath() {
-  const base = app.getPath('userData');
-  return path.join(base, 'data', 'easy-agent.db');
+function getDbPath(): string {
+  return join(app.getPath('userData'), 'data', 'easy-agent.db');
 }
 
-async function createWindow() {
+function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
   });
 
-  if (process.env.NODE_ENV === 'development') {
-    mainWindow.loadURL('http://localhost:5173');
+  if (process.env.ELECTRON_RENDERER_URL) {
+    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
     mainWindow.webContents.openDevTools();
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+    mainWindow.loadFile(join(__dirname, '../renderer/index.html'));
   }
 
-  // 注册 IPC Handler（在窗口创建后，以便传入 mainWindow）
-  const storage = core.getStorage();
-  registerChatHandlers(ipcMain, core, mainWindow);
-  registerConfigHandlers(ipcMain, storage);
+  // 注册 IPC Handler（core 已初始化）
+  if (core) {
+    registerChatHandlers(ipcMain, core, mainWindow);
+    registerConfigHandlers(ipcMain, core.getStorage());
+  }
 }
 
 app.whenReady().then(async () => {
-  // 1. 初始化 Storage
   const storage = new SQLiteAdapter(getDbPath(), 'easy-agent-master-key');
-
-  // 2. 初始化 Core
   core = new EasyAgentCore(storage);
-
-  // 3. 启动窗口
   await createWindow();
 
   app.on('activate', () => {
@@ -228,26 +207,25 @@ app.on('window-all-closed', () => {
 });
 ```
 
-## 5. 前端类型声明
+---
+
+## 5. 创建 src/types/electron.d.ts
+
+**`src/types/electron.d.ts`**：
 
 ```typescript
-// renderer/src/types/electron.d.ts
 interface ElectronAPI {
-  // 对话
+  ping?(): string;
   sendMessage(conversationId: string, message: string): Promise<void>;
   getHistory(conversationId: string): Promise<any[]>;
   getConversations(): Promise<any[]>;
-  newConversation(): Promise<any>;
+  newConversation(): Promise<{ id: string; name: string }>;
   deleteConversation(conversationId: string): Promise<boolean>;
-
-  // 配置
   getConfig(): Promise<{ apiKeys: any[]; prompts: any[] }>;
   createApiKey(data: { provider: string; key: string; model: string }): Promise<any>;
   deleteApiKey(id: string): Promise<boolean>;
   createPrompt(data: { name: string; description?: string; systemPrompt: string }): Promise<any>;
   deletePrompt(id: string): Promise<boolean>;
-
-  // 事件
   onToken(callback: (token: string) => void): void;
   onDone(callback: () => void): void;
   onError(callback: (error: string) => void): void;
@@ -262,12 +240,45 @@ declare global {
 export {};
 ```
 
-## 6. 前端 Store（Pinia）
+---
+
+## 6. 创建 src/api/chat.ts
+
+**`src/api/chat.ts`**：
 
 ```typescript
-// renderer/src/stores/agent.ts
+export function setupChatListeners(callbacks: {
+  onToken: (token: string) => void;
+  onDone: () => void;
+  onError: (msg: string) => void;
+}) {
+  window.electronAPI.onToken(callbacks.onToken);
+  window.electronAPI.onDone(callbacks.onDone);
+  window.electronAPI.onError(callbacks.onError);
+}
+
+export const chatApi = {
+  send: (conversationId: string, message: string) =>
+    window.electronAPI.sendMessage(conversationId, message),
+  getHistory: (conversationId: string) =>
+    window.electronAPI.getHistory(conversationId),
+  getConversations: () => window.electronAPI.getConversations(),
+  newConversation: () => window.electronAPI.newConversation(),
+  deleteConversation: (id: string) =>
+    window.electronAPI.deleteConversation(id),
+};
+```
+
+---
+
+## 7. 创建 src/stores/agent.ts
+
+**`src/stores/agent.ts`**：
+
+```typescript
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
+import { chatApi, setupChatListeners } from '@/api/chat';
 
 export const useAgentStore = defineStore('agent', () => {
   const messages = ref<any[]>([]);
@@ -275,43 +286,36 @@ export const useAgentStore = defineStore('agent', () => {
   const currentConversationId = ref<string | null>(null);
   const conversations = ref<any[]>([]);
 
-  // 注册事件监听（只注册一次）
   function setupListeners() {
-    window.electronAPI.onToken((token: string) => {
-      const lastMsg = messages.value[messages.value.length - 1];
-      if (lastMsg?.role === 'assistant') {
-        lastMsg.content += token;
-      } else {
+    setupChatListeners({
+      onToken: (token: string) => {
+        const last = messages.value[messages.value.length - 1];
+        if (last?.role === 'assistant') {
+          last.content += token;
+        } else {
+          messages.value.push({
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: token,
+            createdAt: new Date().toISOString(),
+          });
+        }
+      },
+      onDone: () => { isLoading.value = false; },
+      onError: (msg: string) => {
+        isLoading.value = false;
         messages.value.push({
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: token,
+          content: `错误：${msg}`,
           createdAt: new Date().toISOString(),
         });
-      }
-    });
-
-    window.electronAPI.onDone(() => {
-      isLoading.value = false;
-    });
-
-    window.electronAPI.onError((error: string) => {
-      isLoading.value = false;
-      messages.value.push({
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: `错误：${error}`,
-        createdAt: new Date().toISOString(),
-      });
+      },
     });
   }
 
   async function sendMessage(content: string) {
-    if (!currentConversationId.value) {
-      await newConversation();
-    }
-
-    // 添加用户消息
+    if (!currentConversationId.value) await newConversation();
     messages.value.push({
       id: crypto.randomUUID(),
       conversationId: currentConversationId.value,
@@ -319,145 +323,91 @@ export const useAgentStore = defineStore('agent', () => {
       content,
       createdAt: new Date().toISOString(),
     });
-
     isLoading.value = true;
-
     try {
-      await window.electronAPI.sendMessage(currentConversationId.value!, content);
-    } catch (err: any) {
-      isLoading.value = false;
-      messages.value.push({
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: `错误：${err.message}`,
-        createdAt: new Date().toISOString(),
-      });
-    }
+      await chatApi.send(currentConversationId.value!, content);
+    } catch { isLoading.value = false; }
   }
 
   async function newConversation() {
-    const conv = await window.electronAPI.newConversation();
+    const conv = await chatApi.newConversation();
     currentConversationId.value = conv.id;
     messages.value = [];
     await loadConversations();
+    return conv;
   }
 
   async function loadConversations() {
-    conversations.value = await window.electronAPI.getConversations();
+    conversations.value = await chatApi.getConversations();
   }
 
   async function selectConversation(id: string) {
     currentConversationId.value = id;
-    messages.value = await window.electronAPI.getHistory(id);
+    messages.value = await chatApi.getHistory(id);
   }
 
   return {
-    messages,
-    isLoading,
-    currentConversationId,
-    conversations,
-    setupListeners,
-    sendMessage,
-    newConversation,
-    loadConversations,
-    selectConversation,
+    messages, isLoading, currentConversationId, conversations,
+    setupListeners, sendMessage, newConversation, loadConversations, selectConversation,
   };
 });
 ```
 
-## 7. 前端组件（ChatView）
+---
+
+## 8. 创建 src/api/config.ts
+
+**`src/api/config.ts`**：
 
 ```typescript
-// renderer/src/views/ChatView.vue（关键部分）
-<script setup lang="ts">
-import { ref, onMounted } from 'vue';
-import { useAgentStore } from '@/stores/agent';
-import { storeToRefs } from 'pinia';
-
-const agentStore = useAgentStore();
-const { messages, isLoading } = storeToRefs(agentStore);
-const inputText = ref('');
-
-onMounted(() => {
-  agentStore.setupListeners();
-  agentStore.newConversation();
-});
-
-async function handleSend() {
-  const text = inputText.value.trim();
-  if (!text || isLoading.value) return;
-  inputText.value = '';
-  await agentStore.sendMessage(text);
-}
-
-function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    handleSend();
-  }
-}
-</script>
-
-<template>
-  <div class="chat-view">
-    <!-- 消息列表 -->
-    <div class="messages">
-      <div
-        v-for="msg in messages"
-        :key="msg.id"
-        :class="['message', msg.role]"
-      >
-        {{ msg.content }}
-      </div>
-      <div v-if="isLoading" class="loading">思考中...</div>
-    </div>
-
-    <!-- 输入框 -->
-    <div class="input-area">
-      <textarea
-        v-model="inputText"
-        placeholder="输入消息..."
-        rows="1"
-        :disabled="isLoading"
-        @keydown="handleKeydown"
-      />
-      <button @click="handleSend" :disabled="!inputText.trim() || isLoading">
-        发送
-      </button>
-    </div>
-  </div>
-</template>
+export const configApi = {
+  getConfig: () => window.electronAPI.getConfig(),
+  createApiKey: (data: { provider: string; key: string; model: string }) =>
+    window.electronAPI.createApiKey(data),
+  deleteApiKey: (id: string) => window.electronAPI.deleteApiKey(id),
+  createPrompt: (data: { name: string; description?: string; systemPrompt: string }) =>
+    window.electronAPI.createPrompt(data),
+  deletePrompt: (id: string) => window.electronAPI.deletePrompt(id),
+};
 ```
 
-## 8. 验证
+---
+
+## 9. 验证
+
+```bash
+npm run dev
+```
 
 ### 完整流程测试
 
-```
-步骤：
-  1. 启动应用（electron npm run dev）
-  2. 打开 DevTools，确认无报错
-  3. 打开 Vue DevTools
-  4. 输入："你好"
-  5. 看到 AI 回复（逐字出现）
-  6. 关闭应用，重新打开
-  7. 历史对话还在
-```
+1. 打开 DevTools，确认无报错
+2. 切换到设置页，添加 API Key
+3. 切换到聊天页，输入"你好"
+4. 看到 AI 回复（逐字出现）
+5. 关闭应用，重新打开
+6. 历史对话还在
 
-### 预期结果
+---
+
+## MVP 完成！
 
 ```
-浏览器界面：
-  - 聊天区域显示消息
-  - 用户消息在右侧，AI 消息在左侧
-  - 输入框可以输入
-  - 发送后消息立即出现
-  - AI 回复逐字出现
-  - loading 状态正常
+✅ npm run dev 单一命令启动
+✅ Electron 窗口正常显示
+✅ SQLite 存储能保存数据
+✅ OpenAI 能调用
+✅ IPC 打通，前端能调用后端
+✅ 流式显示回复
+✅ 重启后数据持久化
 
-重启后：
-  - 对话列表还在
-  - 历史消息还在
+接下来可以加的功能：
+  - Claude 适配器
+  - MCP 插件接入
+  - Workflow 工作流
+  - Vue Flow 画布
+  - Agent Pet 动画
+  - Prompt 模板管理
 ```
 
 ---
@@ -465,41 +415,18 @@ function handleKeydown(e: KeyboardEvent) {
 ## 完成后检查清单
 
 ```
-✅ ipc/chat.handler.ts 已创建
-✅ ipc/config.handler.ts 已创建
-✅ preload.ts 已更新（暴露完整 API）
-✅ main.ts 已更新（注册所有 IPC Handler）
-✅ renderer/src/types/electron.d.ts 已创建
-✅ renderer/src/stores/agent.ts 已创建
-✅ renderer/src/views/ChatView.vue 已对接
+✅ electron/ipc/chat.handler.ts 已创建
+✅ electron/ipc/config.handler.ts 已创建
+✅ electron/preload.ts 已更新
+✅ electron/main.ts 已更新
+✅ src/types/electron.d.ts 已创建
+✅ src/api/chat.ts 已创建
+✅ src/api/config.ts 已创建
+✅ src/stores/agent.ts 已创建
 ✅ 完整对话流程跑通
 ✅ 重启后数据持久化
 ```
 
 ---
 
-## MVP 完成！
-
-```
-恭喜！MVP 已完成。
-
-现在你有一个可以：
-  ✅ 打开 Electron 窗口
-  ✅ 配置 API Key
-  ✅ 和 AI 对话
-  ✅ 保存对话历史
-  ✅ 流式显示回复
-
-接下来可以加的功能：
-  - Claude 适配器
-  - MCP 插件接入
-  - Workflow 工作流
-  - Agent Pet 动画
-  - 工作流画布
-  - Prompt 模板管理
-  ...
-```
-
----
-
-*文档版本: v0.1.0 | 最后更新: 2026-05-26*
+*文档版本: v0.2.0 | 最后更新: 2026-05-26*

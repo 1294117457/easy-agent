@@ -1,32 +1,67 @@
 # EasyAgent 前端（Renderer）开发指南
 
-> 版本: v0.1.0 MVP
+> 版本: v0.2.0 MVP
 > 日期: 2026-05-26
 > 说明: 前端指 Electron Renderer Process 内的 Vue 3 应用
 > 前置: 你有 Vue 3 / TS / Pinia 开发经验
+> 架构: electron-vite 单项目，代码位于 `src/`
 
 ---
 
 ## 0. 架构概览
 
 ```
-Electron Renderer Process
-├── Vue 3 应用
-│   ├── 通过 window.electronAPI 调用主进程
-│   ├── 本地缓存用 Pinia + localStorage（不直接用 IndexedDB）
-│   └── 不直接访问数据库，只通过 IPC 和主进程通信
+easy-agent/
+├── src/                          # 渲染进程 Vue 源码
+│   ├── main.ts                  # Vue 入口
+│   ├── App.vue                  # 根组件
+│   ├── style.css                # 全局样式
+│   ├── components/
+│   │   └── Sidebar.vue          # 侧边栏
+│   ├── views/
+│   │   ├── ChatView.vue         # 对话视图
+│   │   ├── FlowView.vue         # 工作流视图
+│   │   ├── PluginView.vue       # 插件视图
+│   │   ├── SettingsView.vue     # 设置视图
+│   │   └── HistoryView.vue       # 历史视图
+│   ├── stores/
+│   │   └── agent.ts             # Pinia Store
+│   ├── api/
+│   │   ├── chat.ts              # IPC 对话 API
+│   │   └── config.ts            # IPC 配置 API
+│   └── types/
+│       └── electron.d.ts         # ElectronAPI 类型声明
 │
-└── IPC 通信方式
-    ├── window.electronAPI.xxx()  → 发起请求
-    ├── window.electronAPI.onXxx() → 监听主进程推送
-    └── 响应和推送都是异步的
+├── index.html                    # HTML 入口
+├── electron.vite.config.ts      # electron-vite 配置
+└── tsconfig.web.json            # 渲染进程 TypeScript 配置
 ```
 
-**与之前 Web 版的差异**：
-- 不再有 axios，不再有 HTTP 请求
-- API 调用全部换成 `window.electronAPI`（由 preload 暴露）
-- 不再有跨域问题，不在需要 Vite 代理
-- SSE 流式推送变成 IPC 的 `onToken` 事件
+**通信模型**：
+
+```
+Renderer Process (src/)
+        │
+        │ window.electronAPI.xxx()  ← 发起请求（invoke）
+        │ window.electronAPI.onXxx() ← 监听主进程推送
+        │
+        ▼
+Preload Bridge (electron/preload.ts → dist/preload/index.js)
+        │
+        │ IPC
+        ▼
+Main Process (electron/main.ts → dist/main/main.js)
+```
+
+**与之前 packages 结构的差异**：
+
+| 对比项 | 旧架构（packages/renderer） | 新架构（electron-vite） |
+|--------|--------------------------|----------------------|
+| 项目根目录 | `packages/renderer/` | 项目根目录 |
+| HTML 入口 | `packages/renderer/index.html` | 根目录 `index.html` |
+| 构建配置 | 独立 `vite.config.ts` | `electron.vite.config.ts` 中的 `renderer` 字段 |
+| Dev Server | 独立运行 `npm run dev` | 由 `electron-vite dev` 统一启动 |
+| 类型声明来源 | 手动维护 `preload.d.ts` | `electron/preload.ts` 编译自动推断 |
 
 ---
 
@@ -34,10 +69,10 @@ Electron Renderer Process
 
 ### 1.1 创建项目
 
+electron-vite 初始化（已有项目则跳过）：
+
 ```bash
-cd easy-agent
-npm create vite@latest renderer -- --template vue-ts
-cd renderer
+npm create @electron-vite/quick-start@latest
 ```
 
 ### 1.2 安装依赖
@@ -53,61 +88,60 @@ npm install \
   clsx
 ```
 
-### 1.3 配置 Vite（适配 Electron）
+### 1.3 electron-vite 配置（electron.vite.config.ts）
 
 ```typescript
-// renderer/vite.config.ts
-import { defineConfig } from 'vite';
+import { defineConfig } from 'electron-vite';
 import vue from '@vitejs/plugin-vue';
 import { resolve } from 'path';
 
 export default defineConfig({
-  plugins: [vue()],
-  resolve: {
-    alias: { '@': resolve(__dirname, 'src') },
+  main: {
+    build: {
+      rollupOptions: {
+        input: {
+          main: resolve(__dirname, 'electron/main.ts'),
+          preload: resolve(__dirname, 'electron/preload.ts'),
+        },
+        output: { entryFileNames: '[name]/[name].js' },
+      },
+    },
   },
-  base: './',  // Electron 打包需要相对路径
-  build: {
-    outDir: '../electron/dist/renderer',  // 输出到 Electron 目录
-    emptyOutDir: true,
+  preload: {
+    build: {
+      rollupOptions: {
+        input: resolve(__dirname, 'electron/preload.ts'),
+        output: { entryFileNames: 'preload/index.js' },
+      },
+    },
   },
-  server: {
-    port: 5173,  // Vite Dev Server
+  renderer: {
+    plugins: [vue()],
+    resolve: { alias: { '@': resolve(__dirname, 'src') } },
   },
 });
 ```
 
 ### 1.4 配置 Electron 类型声明
 
+**`src/types/electron.d.ts`**：
+
 ```typescript
-// renderer/src/types/electron.d.ts
 interface ElectronAPI {
-  sendMessage: (message: string) => Promise<string>;  // 返回 conversationId
-  onToken: (cb: (token: string) => void) => void;
-  onToolCall: (cb: (data: { serverId: string; toolName: string; arguments: any }) => void) => void;
-  onDone: (cb: () => void) => void;
-  onError: (cb: (msg: string) => void) => void;
-  onStatusChange: (cb: (status: string) => void) => void;
-
-  getConfig: () => Promise<{
-    apiKeys: any[];
-    prompts: any[];
-    mcpServers: any[];
-  }>;
-  createApiKey: (data: { provider: string; key: string; model: string }) => Promise<any>;
-  deleteApiKey: (id: string) => Promise<void>;
-  createPrompt: (data: { name: string; description?: string; systemPrompt: string }) => Promise<any>;
-  deletePrompt: (id: string) => Promise<void>;
-
-  connectMcp: (config: any) => Promise<any>;
-  disconnectMcp: (id: string) => Promise<void>;
-  listMcpServers: () => Promise<any[]>;
-  listMcpTools: (serverId: string) => Promise<any[]>;
-
-  listWorkflows: () => Promise<any[]>;
-  saveWorkflow: (data: any) => Promise<any>;
-  deleteWorkflow: (id: string) => Promise<void>;
-  executeWorkflow: (id: string, input: any) => Promise<any>;
+  ping?(): string;
+  sendMessage(conversationId: string, message: string): Promise<void>;
+  getHistory(conversationId: string): Promise<any[]>;
+  getConversations(): Promise<any[]>;
+  newConversation(): Promise<{ id: string; name: string }>;
+  deleteConversation(id: string): Promise<boolean>;
+  getConfig(): Promise<{ apiKeys: any[]; prompts: any[] }>;
+  createApiKey(data: { provider: string; key: string; model: string }): Promise<any>;
+  deleteApiKey(id: string): Promise<boolean>;
+  createPrompt(data: { name: string; description?: string; systemPrompt: string }): Promise<any>;
+  deletePrompt(id: string): Promise<boolean>;
+  onToken(callback: (token: string) => void): void;
+  onDone(callback: () => void): void;
+  onError(callback: (error: string) => void): void;
 }
 
 declare global {
@@ -121,95 +155,38 @@ export {};
 
 ---
 
-## 2. 目录结构
-
-```
-renderer/src/
-├── main.ts
-├── App.vue
-├── router/
-│   └── index.ts
-├── views/
-│   ├── ChatView.vue
-│   ├── FlowView.vue
-│   ├── PluginView.vue
-│   ├── SettingsView.vue
-│   └── HistoryView.vue
-├── components/
-│   ├── AgentPet/
-│   │   ├── AgentPet.vue
-│   │   └── PetStates.ts
-│   ├── FlowCanvas/
-│   │   ├── FlowCanvas.vue
-│   │   ├── InputNode.vue
-│   │   ├── LLMNode.vue
-│   │   ├── MCPToolNode.vue
-│   │   └── OutputNode.vue
-│   ├── Sidebar.vue
-│   ├── MessageBubble.vue
-│   └── ...
-├── stores/              # Pinia Store
-│   ├── agent.ts         # 对话 + Agent Pet 状态
-│   ├── plugin.ts        # MCP 插件
-│   ├── workflow.ts      # 工作流
-│   ├── conversation.ts  # 对话历史
-│   └── prompt.ts        # Prompt 模板
-├── api/                 # IPC 封装（调用 electronAPI）
-│   ├── chat.ts
-│   ├── config.ts
-│   ├── mcp.ts
-│   └── workflow.ts
-├── types/
-│   ├── electron.d.ts   # ElectronAPI 类型声明
-│   ├── agent.ts
-│   ├── workflow.ts
-│   └── ...
-└── styles/
-    ├── variables.css
-    └── global.css
-```
-
----
-
-## 3. 分步实现
+## 2. 分步实现
 
 ### Step 1: IPC API 封装
 
-之前 Web 版的 axios 实例，在这里换成 `window.electronAPI` 封装。
-
-**`renderer/src/api/chat.ts`**：
+**`src/api/chat.ts`**：
 
 ```typescript
-// renderer/src/api/chat.ts
-
-// 注册 IPC 监听（全局只需注册一次）
-export function setupChatListeners(
-  callbacks: {
-    onToken: (token: string) => void;
-    onToolCall: (data: { serverId: string; toolName: string; args: any }) => void;
-    onDone: () => void;
-    onError: (msg: string) => void;
-    onStatusChange: (status: string) => void;
-  }
-) {
+export function setupChatListeners(callbacks: {
+  onToken: (token: string) => void;
+  onDone: () => void;
+  onError: (msg: string) => void;
+}) {
   window.electronAPI.onToken(callbacks.onToken);
-  window.electronAPI.onToolCall(callbacks.onToolCall);
   window.electronAPI.onDone(callbacks.onDone);
   window.electronAPI.onError(callbacks.onError);
-  window.electronAPI.onStatusChange(callbacks.onStatusChange);
 }
 
 export const chatApi = {
-  send: (message: string): Promise<string> => {
-    return window.electronAPI.sendMessage(message);
-  },
+  send: (conversationId: string, message: string) =>
+    window.electronAPI.sendMessage(conversationId, message),
+  getHistory: (conversationId: string) =>
+    window.electronAPI.getHistory(conversationId),
+  getConversations: () => window.electronAPI.getConversations(),
+  newConversation: () => window.electronAPI.newConversation(),
+  deleteConversation: (id: string) =>
+    window.electronAPI.deleteConversation(id),
 };
 ```
 
-**`renderer/src/api/config.ts`**：
+**`src/api/config.ts`**：
 
 ```typescript
-// renderer/src/api/config.ts
 export const configApi = {
   getConfig: () => window.electronAPI.getConfig(),
   createApiKey: (data: { provider: string; key: string; model: string }) =>
@@ -221,185 +198,106 @@ export const configApi = {
 };
 ```
 
-**`renderer/src/api/mcp.ts`**：
+### Step 2: Pinia Store
+
+**`src/stores/agent.ts`**：
 
 ```typescript
-// renderer/src/api/mcp.ts
-export const mcpApi = {
-  connect: (config: { name: string; type: 'stdio' | 'sse'; command?: string; url?: string }) =>
-    window.electronAPI.connectMcp(config),
-  disconnect: (id: string) => window.electronAPI.disconnectMcp(id),
-  listServers: () => window.electronAPI.listMcpServers(),
-  listTools: (serverId: string) => window.electronAPI.listMcpTools(serverId),
-};
-```
-
-**`renderer/src/api/workflow.ts`**：
-
-```typescript
-// renderer/src/api/workflow.ts
-export const workflowApi = {
-  list: () => window.electronAPI.listWorkflows(),
-  save: (data: any) => window.electronAPI.saveWorkflow(data),
-  delete: (id: string) => window.electronAPI.deleteWorkflow(id),
-  execute: (id: string, input: any) => window.electronAPI.executeWorkflow(id, input),
-};
-```
-
-### Step 2: Pinia Store（与之前 Web 版结构完全一致）
-
-**`renderer/src/stores/agent.ts`**：
-
-```typescript
-// renderer/src/stores/agent.ts
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
-import type { Message, PetMood } from '@/types/agent';
+import { ref } from 'vue';
 import { chatApi, setupChatListeners } from '@/api/chat';
-import { useConversationStore } from './conversation';
 
 export const useAgentStore = defineStore('agent', () => {
-  const petMood = ref<PetMood>('idle');
+  const messages = ref<any[]>([]);
   const isLoading = ref(false);
-  const conversationStore = useConversationStore();
+  const currentConversationId = ref<string | null>(null);
+  const conversations = ref<any[]>([]);
 
-  // 初始化 IPC 监听（只注册一次）
-  setupChatListeners({
-    onToken: (token) => {
-      // 流式追加 token 到最后一条消息
-      const msgs = conversationStore.messages;
-      const last = msgs[msgs.length - 1];
-      if (last?.role === 'assistant') {
-        last.content += token;
-      } else {
-        conversationStore.appendMessage({
-          id: crypto.randomUUID(), conversationId: conversationStore.currentConversationId || '',
-          role: 'assistant', content: token, createdAt: new Date().toISOString(),
-        });
-      }
-    },
-    onToolCall: () => { petMood.value = 'working'; },
-    onDone: () => { petMood.value = 'happy'; isLoading.value = false; },
-    onError: () => { petMood.value = 'error'; isLoading.value = false; },
-    onStatusChange: (status) => { petMood.value = status as PetMood; },
-  });
+  function setupListeners() {
+    setupChatListeners({
+      onToken: (token) => {
+        const last = messages.value[messages.value.length - 1];
+        if (last?.role === 'assistant') {
+          last.content += token;
+        } else {
+          messages.value.push({ id: crypto.randomUUID(), role: 'assistant', content: token, createdAt: new Date().toISOString() });
+        }
+      },
+      onDone: () => { isLoading.value = false; },
+      onError: (msg) => {
+        isLoading.value = false;
+        messages.value.push({ id: crypto.randomUUID(), role: 'assistant', content: `错误：${msg}`, createdAt: new Date().toISOString() });
+      },
+    });
+  }
 
   async function sendMessage(content: string) {
-    if (!conversationStore.currentConversationId) {
-      await conversationStore.createConversation();
-    }
-
-    // 保存用户消息
-    conversationStore.appendMessage({
-      id: crypto.randomUUID(),
-      conversationId: conversationStore.currentConversationId || '',
-      role: 'user', content, createdAt: new Date().toISOString(),
-    });
-
-    petMood.value = 'thinking';
+    if (!currentConversationId.value) await newConversation();
+    messages.value.push({ id: crypto.randomUUID(), conversationId: currentConversationId.value, role: 'user', content, createdAt: new Date().toISOString() });
     isLoading.value = true;
-
     try {
-      await chatApi.send(content);
-    } catch (err: any) {
-      petMood.value = 'error';
-      conversationStore.appendMessage({
-        id: crypto.randomUUID(),
-        conversationId: conversationStore.currentConversationId || '',
-        role: 'assistant',
-        content: `出错了: ${err.message}`,
-        createdAt: new Date().toISOString(),
-      });
-    }
+      await chatApi.send(currentConversationId.value!, content);
+    } catch { isLoading.value = false; }
   }
 
-  function setMood(mood: PetMood) { petMood.value = mood; }
-
-  return { petMood, isLoading, sendMessage, setMood };
-});
-```
-
-**`renderer/src/stores/conversation.ts`**：
-
-```typescript
-// renderer/src/stores/conversation.ts
-import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
-import type { Conversation, Message } from '@/types/agent';
-
-export const useConversationStore = defineStore('conversation', () => {
-  const conversations = ref<Conversation[]>([]);
-  const currentConversationId = ref<string | null>(null);
-  const messages = ref<Message[]>([]);
-
-  const currentConversation = computed(() =>
-    conversations.value.find(c => c.id === currentConversationId.value) ?? null
-  );
-
-  function appendMessage(msg: Message) {
-    messages.value.push(msg);
-  }
-
-  async function createConversation(name?: string) {
-    // Electron IPC 方式：直接创建，不走 HTTP
-    // 这里需要前端自己维护 ID（因为 SQLite 在主进程）
-    const id = crypto.randomUUID();
-    const now = new Date().toISOString();
-    const conv: Conversation = { id, name: name || '新对话', createdAt: now, updatedAt: now };
-    conversations.value.unshift(conv);
-    currentConversationId.value = id;
+  async function newConversation() {
+    const conv = await chatApi.newConversation();
+    currentConversationId.value = conv.id;
     messages.value = [];
+    await loadConversations();
     return conv;
+  }
+
+  async function loadConversations() {
+    conversations.value = await chatApi.getConversations();
   }
 
   async function selectConversation(id: string) {
     currentConversationId.value = id;
-    messages.value = [];
-    // TODO: 从 SQLite 加载历史消息（IPC 调用）
+    messages.value = await chatApi.getHistory(id);
   }
 
-  return {
-    conversations, currentConversationId, messages, currentConversation,
-    appendMessage, createConversation, selectConversation,
-  };
+  return { messages, isLoading, currentConversationId, conversations, setupListeners, sendMessage, newConversation, loadConversations, selectConversation };
 });
 ```
 
-### Step 3: CSS 变量和布局
+### Step 3: 路由和 App 布局
 
-与之前 Web 版完全一致，此处省略。只需确保 `vite.config.ts` 中的 `base: './'` 配置正确。
-
-### Step 4: 路由和 App 布局
-
-**`renderer/src/router/index.ts`**：
+**`src/main.ts`**：
 
 ```typescript
-// renderer/src/router/index.ts
-import { createRouter, createWebHashHistory } from 'vue-router';  // Hash 模式更适配 Electron
+import { createApp } from 'vue';
+import { createPinia } from 'pinia';
+import { createRouter, createWebHashHistory } from 'vue-router';
+import App from './App.vue';
+import './style.css';
 
-export default createRouter({
-  history: createWebHashHistory(),  // Electron 打包后用 Hash 路由避免需要服务器配置
+const router = createRouter({
+  history: createWebHashHistory(),
   routes: [
     { path: '/', redirect: '/chat' },
-    { path: '/chat', component: () => import('@/views/ChatView.vue') },
-    { path: '/flow', component: () => import('@/views/FlowView.vue') },
-    { path: '/plugins', component: () => import('@/views/PluginView.vue') },
-    { path: '/settings', component: () => import('@/views/SettingsView.vue') },
-    { path: '/history', component: () => import('@/views/HistoryView.vue') },
+    { path: '/chat', component: () => import('./views/ChatView.vue') },
+    { path: '/flow', component: () => import('./views/FlowView.vue') },
+    { path: '/plugins', component: () => import('./views/PluginView.vue') },
+    { path: '/settings', component: () => import('./views/SettingsView.vue') },
+    { path: '/history', component: () => import('./views/HistoryView.vue') },
   ],
 });
+
+const app = createApp(App);
+app.use(createPinia());
+app.use(router);
+app.mount('#app');
 ```
 
 > **注意**：Electron 打包后没有 Web 服务器，路由模式用 `createWebHashHistory()`（Hash 路由），避免刷新后 404。
 
-**`renderer/src/App.vue`**：
+**`src/App.vue`**：
 
 ```vue
-<!-- renderer/src/App.vue -->
 <script setup lang="ts">
 import { RouterView } from 'vue-router';
-import Sidebar from '@/components/Sidebar.vue';
-import AgentPet from '@/components/AgentPet/AgentPet.vue';
+import Sidebar from './components/Sidebar.vue';
 </script>
 
 <template>
@@ -409,7 +307,7 @@ import AgentPet from '@/components/AgentPet/AgentPet.vue';
       <RouterView />
     </main>
     <aside class="agent-panel">
-      <AgentPet />
+      <div class="pet-placeholder">Agent Pet</div>
     </aside>
   </div>
 </template>
@@ -424,29 +322,23 @@ import AgentPet from '@/components/AgentPet/AgentPet.vue';
 </style>
 ```
 
-### Step 5: 对话视图（核心变化：不再有 SSE，改为 IPC 推送）
+### Step 4: 对话视图
 
-**`renderer/src/views/ChatView.vue`**：
+**`src/views/ChatView.vue`**（核心变化：不再有 SSE，改为 IPC 推送）：
 
 ```vue
-<!-- renderer/src/views/ChatView.vue -->
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { useAgentStore } from '@/stores/agent';
-import { useConversationStore } from '@/stores/conversation';
 import { storeToRefs } from 'pinia';
-import MessageBubble from '@/components/MessageBubble.vue';
 
 const agentStore = useAgentStore();
-const conversationStore = useConversationStore();
-const { messages, currentConversation } = storeToRefs(conversationStore);
-const { isLoading } = storeToRefs(agentStore);
+const { messages, isLoading } = storeToRefs(agentStore);
 const inputText = ref('');
 
-onMounted(async () => {
-  if (!conversationStore.currentConversationId) {
-    await conversationStore.createConversation();
-  }
+onMounted(() => {
+  agentStore.setupListeners();
+  agentStore.newConversation();
 });
 
 async function handleSend() {
@@ -463,46 +355,30 @@ function handleKeydown(e: KeyboardEvent) {
 
 <template>
   <div class="chat-view">
-    <!-- 对话标题栏 -->
-    <div class="chat-header">
-      <span class="chat-title">{{ currentConversation?.name || '新对话' }}</span>
-      <button class="new-chat-btn" @click="conversationStore.createConversation()">+ 新对话</button>
-    </div>
-
-    <!-- 消息列表 -->
     <div class="messages">
       <div v-if="messages.length === 0" class="empty-state">
         <p>你好！我是 EasyAgent</p>
         <p>告诉我你想做什么，我来帮你完成。</p>
       </div>
-      <MessageBubble v-for="msg in messages" :key="msg.id" :message="msg" />
-      <div v-if="isLoading" class="loading-dots">
-        <span /><span /><span />
+      <div v-for="msg in messages" :key="msg.id" :class="['message', msg.role]">
+        <div class="bubble">{{ msg.content }}</div>
       </div>
+      <div v-if="isLoading" class="loading"><span class="dot" /><span class="dot" /><span class="dot" /></div>
     </div>
-
-    <!-- 输入框 -->
     <div class="input-area">
       <textarea v-model="inputText" class="input-box" placeholder="输入消息..." rows="1"
         :disabled="isLoading" @keydown="handleKeydown" />
-      <button class="send-btn" :disabled="!inputText.trim() || isLoading" @click="handleSend">
-        发送
-      </button>
+      <button class="send-btn" :disabled="!inputText.trim() || isLoading" @click="handleSend">发送</button>
     </div>
   </div>
 </template>
-
-<style scoped>
-/* 与之前 Web 版一致 */
-</style>
 ```
 
-### Step 6: 设置视图（含 API Key 和 Prompt 管理）
+### Step 5: 设置视图
 
-**`renderer/src/views/SettingsView.vue`**：
+**`src/views/SettingsView.vue`**（含 API Key 和 Prompt 管理）：
 
 ```vue
-<!-- renderer/src/views/SettingsView.vue -->
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { configApi } from '@/api/config';
@@ -539,13 +415,11 @@ async function handleAddPrompt() {
 <template>
   <div class="settings-view">
     <h2>设置</h2>
-
-    <!-- API Key -->
     <section class="section">
       <h3>API Key 配置</h3>
       <div v-for="key in apiKeys" :key="key.id" class="item-row">
         <span>{{ key.provider }} / {{ key.model }}</span>
-        <button @click="handleDeleteKey(key.id)">删除</button>
+        <button class="danger" @click="handleDeleteKey(key.id)">删除</button>
       </div>
       <div class="form-row">
         <select v-model="newKeyForm.provider">
@@ -553,57 +427,34 @@ async function handleAddPrompt() {
           <option value="anthropic">Anthropic</option>
         </select>
         <input v-model="newKeyForm.key" placeholder="sk-..." />
-        <input v-model="newKeyForm.model" placeholder="gpt-4o" />
+        <input v-model="newKeyForm.model" placeholder="gpt-4o" style="width: 120px" />
         <button @click="handleAddKey">添加</button>
       </div>
     </section>
-
-    <!-- Prompt 模板 -->
     <section class="section">
       <h3>Prompt 模板</h3>
       <div v-for="p in prompts" :key="p.id" class="item-row">
         <span>{{ p.name }}</span>
-        <button @click="configApi.deletePrompt(p.id); prompts = prompts.filter(x => x.id !== p.id)">删除</button>
+        <button class="danger" @click="configApi.deletePrompt(p.id); prompts = prompts.filter(x => x.id !== p.id)">删除</button>
       </div>
       <div class="form-column">
         <input v-model="newPromptForm.name" placeholder="模板名称" />
-        <input v-model="newPromptForm.description" placeholder="描述" />
+        <input v-model="newPromptForm.description" placeholder="描述（可选）" />
         <textarea v-model="newPromptForm.systemPrompt" placeholder="System Prompt..." rows="4" />
         <button @click="handleAddPrompt">保存</button>
       </div>
     </section>
   </div>
 </template>
-
-<style scoped>
-.settings-view { padding: 24px; }
-.section { margin-bottom: 32px; }
-.section h3 { margin-bottom: 12px; color: var(--color-text-secondary); }
-.item-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; }
-.form-row { display: flex; gap: 8px; margin-top: 8px; }
-.form-column { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
-input, select, textarea {
-  padding: 8px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-md);
-  background: var(--color-bg-surface); color: var(--color-text);
-}
-button { padding: 8px 16px; background: var(--color-primary); color: white; border-radius: var(--radius-md); }
-</style>
 ```
-
-### Step 7: 流程编排视图（与之前 Web 版一致）
-
-Vue Flow 的用法在 Electron 环境下完全不变，此处省略。FlowView + 节点组件与之前 Web 版完全一致。
 
 ---
 
-## 4. 启动和验证
+## 3. 启动和验证
 
 ```bash
-# 终端 1：启动 Vite Dev Server（前端开发）
-cd renderer && npm run dev
-
-# 终端 2：启动 Electron（主进程）
-cd electron && npm run dev
+# 单一命令
+npm run dev
 ```
 
 验证清单：
@@ -615,17 +466,18 @@ cd electron && npm run dev
 
 ---
 
-## 5. 关键差异总结
+## 4. 关键差异总结
 
 | 对比项 | 之前 Web 版 | Electron 版 |
-|-------|-----------|------------|
+|--------|-----------|------------|
 | HTTP 请求 | axios | `window.electronAPI` |
 | SSE 流式 | EventSource / fetch 流 | IPC `onToken` 事件 |
 | 跨域 | 需要 Vite 代理 | 不存在跨域 |
 | 路由模式 | History | **Hash** |
 | 数据库 | 远程 SQLite | 本地 SQLite（主进程） |
 | 前端调试 | 浏览器 DevTools | Electron 内置 DevTools |
+| Dev 启动 | 两个终端 | **单一命令** |
 
 ---
 
-*文档版本: v0.1.0 | 最后更新: 2026-05-26*
+*文档版本: v0.2.0 | 最后更新: 2026-05-26*
