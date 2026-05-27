@@ -38,14 +38,17 @@ export interface Message {
   content: string;
   model?: string;
   createdAt: string;
+  isCompressed?: boolean;
 }
 
 export interface Conversation {
   id: string;
   name: string;
   workflowId?: string;
+  summary?: string;
   createdAt: string;
   updatedAt: string;
+  endedAt?: string;
 }
 
 export interface Prompt {
@@ -54,6 +57,7 @@ export interface Prompt {
   description?: string;
   systemPrompt: string;
   isBuiltin: boolean;
+  isActive: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -80,6 +84,7 @@ export interface ApiKey {
   id: string;
   provider: string;
   model: string;
+  baseURL?: string;
   enabled: boolean;
 }
 

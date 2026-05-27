@@ -1,33 +1,50 @@
 import type { ILLMPort } from './ports/llm.port.js';
 import type { IStoragePort } from './ports/storage.port.js';
 import { AgentService } from './application/AgentService.js';
-import { OpenAIAdapter } from './adapters/llm/openai.adapter.js';
+import { CompressionService } from './application/CompressionService.js';
+import { LLMManager, type LLMProviderType } from './application/LLMManager.js';
 
 export class EasyAgentCore {
-  private llmPort: ILLMPort;
+  private llmPort: ILLMPort | null = null;
   private storagePort: IStoragePort;
-  private agentService: AgentService;
+  private llmManager: LLMManager;
+  private agentService: AgentService | null = null;
+  private compressionService: CompressionService | null = null;
 
   constructor(storage: IStoragePort) {
     this.storagePort = storage;
+    this.llmManager = new LLMManager();
 
+    this.initializeLLM();
+  }
+
+  private initializeLLM(): void {
     const keys = this.storagePort.listApiKeys();
     const activeKey = keys.find((k) => k.enabled) || keys[0];
 
     if (!activeKey) {
       console.warn('No API Key configured. Please add one in settings.');
-      this.llmPort = null as unknown as ILLMPort;
-      this.agentService = null as unknown as AgentService;
       return;
     }
 
     const decryptedKey = this.storagePort.getDecryptedKey(activeKey.id);
     if (!decryptedKey) {
-      throw new Error('Failed to decrypt API Key');
+      console.error('Failed to decrypt API Key:', activeKey.id);
+      return;
     }
 
-    this.llmPort = new OpenAIAdapter(activeKey.model, decryptedKey);
-    this.agentService = new AgentService(this.llmPort, this.storagePort);
+    this.llmManager.registerAdapter({
+      keyId: activeKey.id,
+      provider: activeKey.provider as LLMProviderType,
+      model: activeKey.model,
+      decryptedKey,
+    });
+
+    this.llmPort = this.llmManager.getActiveAdapter();
+    if (this.llmPort) {
+      this.agentService = new AgentService(this.llmPort, this.storagePort);
+      this.compressionService = new CompressionService(this.storagePort, this.llmPort);
+    }
   }
 
   sendMessage(
@@ -39,6 +56,10 @@ export class EasyAgentCore {
       onError: (error: string) => void;
     }
   ) {
+    if (!this.agentService) {
+      callbacks.onError('No LLM configured. Please add an API Key in settings.');
+      return;
+    }
     return this.agentService.sendMessage(conversationId, userInput, callbacks);
   }
 
@@ -46,9 +67,58 @@ export class EasyAgentCore {
     return this.storagePort;
   }
 
-  reloadLLM(provider: string, model: string, apiKey: string) {
-    this.llmPort = new OpenAIAdapter(model, apiKey);
-    this.agentService = new AgentService(this.llmPort, this.storagePort);
+  getLLMManager(): LLMManager {
+    return this.llmManager;
+  }
+
+  reloadLLM(keyId: string): void {
+    const keys = this.storagePort.listApiKeys();
+    const keyRecord = keys.find((k) => k.id === keyId);
+
+    if (!keyRecord) {
+      throw new Error(`API Key not found: ${keyId}`);
+    }
+
+    const decryptedKey = this.storagePort.getDecryptedKey(keyId);
+    if (!decryptedKey) {
+      throw new Error('Failed to decrypt API Key');
+    }
+
+    this.llmManager.registerAdapter({
+      keyId: keyRecord.id,
+      provider: keyRecord.provider as LLMProviderType,
+      model: keyRecord.model,
+      decryptedKey,
+      baseURL: keyRecord.baseURL,
+    });
+
+    this.llmPort = this.llmManager.getActiveAdapter();
+    if (this.llmPort) {
+      this.agentService = new AgentService(this.llmPort, this.storagePort);
+      this.compressionService = new CompressionService(this.storagePort, this.llmPort);
+    }
+  }
+
+  hasLLMConfigured(): boolean {
+    return this.llmManager.hasActiveAdapter();
+  }
+
+  getCompressionService(): CompressionService | null {
+    return this.compressionService;
+  }
+
+  async compressConversation(conversationId: string) {
+    if (!this.compressionService) {
+      throw new Error('CompressionService not initialized');
+    }
+    return this.compressionService.compressConversation(conversationId);
+  }
+
+  async endConversation(conversationId: string) {
+    if (!this.compressionService) {
+      throw new Error('CompressionService not initialized');
+    }
+    return this.compressionService.endConversation(conversationId);
   }
 }
 

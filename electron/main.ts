@@ -35,7 +35,7 @@ function createWindow(): void {
 
   if (core) {
     registerChatHandlers(ipcMain, core, mainWindow);
-    registerConfigHandlers(ipcMain, core.getStorage());
+    registerConfigHandlers(ipcMain, core.getStorage(), core);
   }
 }
 

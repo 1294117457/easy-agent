@@ -18,4 +18,8 @@ export const chatApi = {
   newConversation: () => window.electronAPI.newConversation(),
   deleteConversation: (conversationId: string) =>
     window.electronAPI.deleteConversation(conversationId),
+  compressConversation: (conversationId: string) =>
+    window.electronAPI.compressConversation(conversationId),
+  endConversation: (conversationId: string) =>
+    window.electronAPI.endConversation(conversationId),
 };

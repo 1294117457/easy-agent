@@ -2,26 +2,30 @@ import { ChatOpenAI } from '@langchain/openai';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { ILLMPort, LLMResponse } from '../../ports/llm.port.js';
 
-export class OpenAIAdapter implements ILLMPort {
-  readonly provider = 'openai';
+export class DeepSeekAdapter implements ILLMPort {
+  readonly provider = 'deepseek';
   model: string;
   private llm: ChatOpenAI;
 
   constructor(model: string, apiKey: string) {
     this.model = model;
-    console.log('[OpenAIAdapter] 初始化, model:', model);
+    console.log('[DeepSeekAdapter] 初始化, model:', model);
     this.llm = new ChatOpenAI({
-      model,
+      model: this.model,
       apiKey,
-      temperature: 0,
+      temperature: 0.7,
+      maxTokens: 1000,
       streaming: true,
+      configuration: {
+        baseURL: 'https://api.deepseek.com/v1',
+      },
     });
   }
 
   async invoke(messages: BaseMessage[]): Promise<LLMResponse> {
-    console.log('[OpenAIAdapter] invoke 调用');
+    console.log('[DeepSeekAdapter] invoke 调用');
     const result = await this.llm.invoke(messages);
-    console.log('[OpenAIAdapter] invoke 返回:', result.content.substring(0, 100));
+    console.log('[DeepSeekAdapter] invoke 返回:', result.content.substring(0, 100));
     return { content: result.content as string };
   }
 
@@ -29,7 +33,7 @@ export class OpenAIAdapter implements ILLMPort {
     messages: BaseMessage[],
     onChunk: (chunk: string) => void
   ): Promise<LLMResponse> {
-    console.log('[OpenAIAdapter] invokeStream 开始');
+    console.log('[DeepSeekAdapter] invokeStream 开始, messages:', messages.length);
     const stream = await this.llm.stream(messages);
     let full = '';
     let chunkCount = 0;
@@ -38,11 +42,11 @@ export class OpenAIAdapter implements ILLMPort {
       const content = chunk.content as string;
       full += content;
       if (chunkCount <= 5) {
-        console.log('[OpenAIAdapter] chunk', chunkCount, ':', JSON.stringify(content));
+        console.log('[DeepSeekAdapter] chunk', chunkCount, ':', JSON.stringify(content));
       }
       onChunk(content);
     }
-    console.log('[OpenAIAdapter] invokeStream 完成, chunk数:', chunkCount, '总长度:', full.length);
+    console.log('[DeepSeekAdapter] invokeStream 完成, chunk数:', chunkCount, '总长度:', full.length);
     return { content: full };
   }
 }

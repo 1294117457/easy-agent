@@ -12,6 +12,7 @@ export interface CreateApiKeyDTO {
   provider: string;
   key: string;
   model: string;
+  baseURL?: string;
 }
 
 export interface CreateConversationDTO {
@@ -44,9 +45,15 @@ export interface IStoragePort {
   appendMessage(data: AppendMessageDTO): Message;
   deleteConversation(id: string): boolean;
   renameConversation(id: string, name: string): boolean;
+  compressConversation(id: string, summary: string): boolean;
+  endConversation(id: string, title: string): boolean;
+  getMessageCount(convId: string): number;
+  updateMessageCompressed(messageId: string, isCompressed: boolean): boolean;
 
   createPrompt(data: CreatePromptDTO): Prompt;
   listPrompts(): Prompt[];
+  getActivePrompt(): Prompt | null;
+  setActivePrompt(id: string): void;
   updatePrompt(id: string, data: Partial<Prompt>): boolean;
   deletePrompt(id: string): boolean;
 

@@ -12,7 +12,6 @@ const router = createRouter({
     { path: '/flow', component: () => import('./views/FlowView.vue') },
     { path: '/plugins', component: () => import('./views/PluginView.vue') },
     { path: '/settings', component: () => import('./views/SettingsView.vue') },
-    { path: '/history', component: () => import('./views/HistoryView.vue') },
   ],
 });
 

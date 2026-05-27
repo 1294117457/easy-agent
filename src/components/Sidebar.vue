@@ -7,7 +7,6 @@ const navItems = [
   { path: '/flow', label: '工作流', icon: '🔀' },
   { path: '/plugins', label: '插件', icon: '🔌' },
   { path: '/settings', label: '设置', icon: '⚙️' },
-  { path: '/history', label: '历史', icon: '📜' },
 ];
 </script>
 

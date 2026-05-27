@@ -35,11 +35,32 @@ export function registerChatHandlers(
     return core.getStorage().listConversations();
   });
 
-  ipcMain.handle('chat:new', () => {
+  ipcMain.handle('chat:new', async (_, endCurrent: boolean = true) => {
+    if (endCurrent) {
+      const storage = core.getStorage();
+      const conversations = storage.listConversations();
+      const activeConv = conversations.find((c) => !c.endedAt);
+      if (activeConv) {
+        try {
+          await core.endConversation(activeConv.id);
+          console.log('[ChatHandler] 结束对话:', activeConv.id);
+        } catch (e) {
+          console.error('[ChatHandler] 结束对话失败:', e);
+        }
+      }
+    }
     return core.getStorage().createConversation({ name: '新对话' });
   });
 
   ipcMain.handle('chat:delete', (_, conversationId: string) => {
     return core.getStorage().deleteConversation(conversationId);
+  });
+
+  ipcMain.handle('chat:compress', async (_, conversationId: string) => {
+    return core.compressConversation(conversationId);
+  });
+
+  ipcMain.handle('chat:end', async (_, conversationId: string) => {
+    return core.endConversation(conversationId);
   });
 }

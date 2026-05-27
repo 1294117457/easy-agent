@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { RouterView } from 'vue-router';
+import { useConfigStore } from '@/stores/config';
 import Sidebar from './components/Sidebar.vue';
+
+// 初始化配置
+const configStore = useConfigStore();
+configStore.loadConfig();
+configStore.loadLLMConfig();
 </script>
 
 <template>

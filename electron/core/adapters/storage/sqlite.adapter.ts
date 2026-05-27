@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     provider TEXT NOT NULL,
     encrypted_key TEXT NOT NULL,
     model TEXT NOT NULL,
+    base_url TEXT,
     enabled INTEGER DEFAULT 1,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
@@ -83,6 +84,7 @@ CREATE TABLE IF NOT EXISTS prompts (
     description TEXT,
     system_prompt TEXT NOT NULL,
     is_builtin INTEGER DEFAULT 0,
+    is_active INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -126,23 +128,64 @@ export class SQLiteAdapter implements IStoragePort {
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
     this.db.exec(SCHEMA);
+    this.runMigrations();
     this.encryptor = new KeyEncryptor(masterPassword);
+  }
+
+  private runMigrations(): void {
+    // Migration: add base_url column if not exists
+    try {
+      this.db.exec(`ALTER TABLE api_keys ADD COLUMN base_url TEXT`);
+    } catch (e) {
+      // Column already exists, ignore
+    }
+    // Migration: add is_active column if not exists
+    try {
+      this.db.exec(`ALTER TABLE prompts ADD COLUMN is_active INTEGER DEFAULT 0`);
+    } catch (e) {
+      // Column already exists, ignore
+    }
+    // Migration: add summary column to conversations
+    try {
+      this.db.exec(`ALTER TABLE conversations ADD COLUMN summary TEXT`);
+    } catch (e) {
+      // Column already exists, ignore
+    }
+    // Migration: add ended_at column to conversations
+    try {
+      this.db.exec(`ALTER TABLE conversations ADD COLUMN ended_at TEXT`);
+    } catch (e) {
+      // Column already exists, ignore
+    }
+    // Migration: add is_compressed column to messages
+    try {
+      this.db.exec(`ALTER TABLE messages ADD COLUMN is_compressed INTEGER DEFAULT 0`);
+    } catch (e) {
+      // Column already exists, ignore
+    }
   }
 
   createApiKey(data: CreateApiKeyDTO): ApiKey {
     const id = uuidv4();
     this.db
       .prepare(
-        `INSERT INTO api_keys (id, provider, encrypted_key, model) VALUES (?, ?, ?, ?)`
+        `INSERT INTO api_keys (id, provider, encrypted_key, model, base_url) VALUES (?, ?, ?, ?, ?)`
       )
-      .run(id, data.provider, this.encryptor.encrypt(data.key), data.model);
-    return { id, provider: data.provider, model: data.model, enabled: true };
+      .run(id, data.provider, this.encryptor.encrypt(data.key), data.model, data.baseURL || null);
+    return { id, provider: data.provider, model: data.model, baseURL: data.baseURL, enabled: true };
   }
 
   listApiKeys(): ApiKey[] {
     return this.db
-      .prepare(`SELECT id, provider, model, enabled FROM api_keys`)
-      .all() as ApiKey[];
+      .prepare(`SELECT id, provider, model, base_url, enabled FROM api_keys`)
+      .all()
+      .map((row: any) => ({
+        id: row.id,
+        provider: row.provider,
+        model: row.model,
+        baseURL: row.base_url || undefined,
+        enabled: !!row.enabled,
+      })) as ApiKey[];
   }
 
   getDecryptedKey(id: string): string | null {
@@ -174,15 +217,33 @@ export class SQLiteAdapter implements IStoragePort {
   }
 
   listConversations(): Conversation[] {
-    return this.db
+    const rows = this.db
       .prepare(`SELECT * FROM conversations ORDER BY updated_at DESC`)
-      .all() as Conversation[];
+      .all() as any[];
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name || '新对话',
+      workflowId: row.workflow_id || undefined,
+      summary: row.summary || undefined,
+      createdAt: row.created_at || new Date().toISOString(),
+      updatedAt: row.updated_at || new Date().toISOString(),
+      endedAt: row.ended_at || undefined,
+    })) as Conversation[];
   }
 
   getMessages(convId: string): Message[] {
-    return this.db
+    const rows = this.db
       .prepare(`SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC`)
-      .all(convId) as Message[];
+      .all(convId) as any[];
+    return rows.map((row) => ({
+      id: row.id,
+      conversationId: row.conversation_id,
+      role: row.role,
+      content: row.content,
+      model: row.model || undefined,
+      createdAt: row.created_at,
+      isCompressed: !!row.is_compressed,
+    })) as Message[];
   }
 
   appendMessage(data: AppendMessageDTO): Message {
@@ -231,6 +292,7 @@ export class SQLiteAdapter implements IStoragePort {
       description: data.description,
       systemPrompt: data.systemPrompt,
       isBuiltin: !!data.isBuiltin,
+      isActive: false,
       createdAt: now,
       updatedAt: now,
     };
@@ -238,8 +300,23 @@ export class SQLiteAdapter implements IStoragePort {
 
   listPrompts(): Prompt[] {
     return this.db
-      .prepare(`SELECT * FROM prompts ORDER BY is_builtin DESC, created_at DESC`)
+      .prepare(`SELECT * FROM prompts ORDER BY is_builtin DESC, is_active DESC, created_at DESC`)
       .all() as Prompt[];
+  }
+
+  getActivePrompt(): Prompt | null {
+    const rows = this.db
+      .prepare(`SELECT * FROM prompts WHERE is_active = 1 LIMIT 1`)
+      .all() as Prompt[];
+    return rows.length > 0 ? rows[0] : null;
+  }
+
+  setActivePrompt(id: string): void {
+    // 取消所有激活状态
+    this.db.prepare(`UPDATE prompts SET is_active = 0`).run();
+    // 设置目标为激活
+    this.db.prepare(`UPDATE prompts SET is_active = 1, updated_at = ? WHERE id = ?`)
+      .run(new Date().toISOString(), id);
   }
 
   updatePrompt(id: string, data: Partial<Prompt>): boolean {
@@ -247,6 +324,11 @@ export class SQLiteAdapter implements IStoragePort {
     const vals: unknown[] = [];
     if (data.name) { sets.push('name = ?'); vals.push(data.name); }
     if (data.systemPrompt) { sets.push('system_prompt = ?'); vals.push(data.systemPrompt); }
+    if (data.description !== undefined) { sets.push('description = ?'); vals.push(data.description); }
+    if (data.isActive !== undefined) {
+      sets.push('is_active = ?');
+      vals.push(data.isActive ? 1 : 0);
+    }
     if (!sets.length) return false;
     sets.push('updated_at = ?');
     vals.push(new Date().toISOString());
@@ -358,6 +440,33 @@ export class SQLiteAdapter implements IStoragePort {
     return this.db
       .prepare(`SELECT * FROM mcp_tools WHERE server_id = ?`)
       .all(serverId) as McpTool[];
+  }
+
+  compressConversation(id: string, summary: string): boolean {
+    const now = new Date().toISOString();
+    return this.db
+      .prepare(`UPDATE conversations SET summary = ?, updated_at = ? WHERE id = ?`)
+      .run(summary, now, id).changes > 0;
+  }
+
+  endConversation(id: string, title: string): boolean {
+    const now = new Date().toISOString();
+    return this.db
+      .prepare(`UPDATE conversations SET name = ?, ended_at = ?, updated_at = ? WHERE id = ?`)
+      .run(title, now, now, id).changes > 0;
+  }
+
+  getMessageCount(convId: string): number {
+    const result = this.db
+      .prepare(`SELECT COUNT(*) as count FROM messages WHERE conversation_id = ?`)
+      .get(convId) as { count: number } | undefined;
+    return result?.count || 0;
+  }
+
+  updateMessageCompressed(messageId: string, isCompressed: boolean): boolean {
+    return this.db
+      .prepare(`UPDATE messages SET is_compressed = ? WHERE id = ?`)
+      .run(isCompressed ? 1 : 0, messageId).changes > 0;
   }
 
   close(): void {
