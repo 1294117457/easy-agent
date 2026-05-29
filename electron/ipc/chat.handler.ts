@@ -9,20 +9,35 @@ export function registerChatHandlers(
   ipcMain.handle(
     'chat:send',
     async (_, conversationId: string, message: string) => {
+      console.log('[ChatHandler] chat:send 被调用, conversationId:', conversationId);
+
       return new Promise<void>((resolve, reject) => {
-        core.sendMessage(conversationId, message, {
-          onToken: (token) => {
-            mainWindow.webContents.send('agent:token', token);
-          },
-          onDone: () => {
-            mainWindow.webContents.send('agent:done', null);
-            resolve();
-          },
-          onError: (error: string) => {
-            mainWindow.webContents.send('agent:error', error);
-            reject(new Error(error));
-          },
-        });
+        try {
+          core.sendMessage(conversationId, message, {
+            onToken: (token) => {
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('agent:token', token);
+              }
+            },
+            onDone: () => {
+              console.log('[ChatHandler] onDone 被调用');
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('agent:done', null);
+              }
+              resolve();
+            },
+            onError: (error: string) => {
+              console.error('[ChatHandler] onError 被调用:', error);
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('agent:error', error);
+              }
+              reject(new Error(error));
+            },
+          });
+        } catch (err) {
+          console.error('[ChatHandler] sendMessage 异常:', err);
+          reject(err);
+        }
       });
     }
   );

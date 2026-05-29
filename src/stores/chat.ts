@@ -14,6 +14,7 @@ export interface Message {
 export interface Conversation {
   id: string;
   name: string;
+  status: 'idle' | 'loading' | 'completed';
   summary?: string;
   createdAt: string;
   updatedAt: string;
@@ -35,209 +36,278 @@ export const useChatStore = defineStore('chat', () => {
   );
 
   const currentTitle = computed(() => {
-    if (!currentConversation.value) return '新对话';
-    // 如果是默认名称，显示第一句话
-    if (currentConversation.value.name === '新对话' && messages.value.length > 0) {
-      const firstUserMsg = messages.value.find((m) => m.role === 'user');
-      if (firstUserMsg) {
-        return firstUserMsg.content.substring(0, 20) + (firstUserMsg.content.length > 20 ? '...' : '');
-      }
+    if (messages.value.length === 0) return '新对话';
+    const firstUserMsg = messages.value.find((m) => m.role === 'user');
+    if (firstUserMsg) {
+      return firstUserMsg.content.substring(0, 20) + (firstUserMsg.content.length > 20 ? '...' : '');
     }
-    return currentConversation.value.name;
+    return '新对话';
   });
 
-  // 防止重复初始化
-  let listenersInitialized = false;
+  const listenersInitialized = ref(false);
 
-  // 创建助手消息
-  function createAssistantMessage(token: string): Message {
+  function createAssistantMessage(token: string, conversationId: string): Message {
     return {
       id: crypto.randomUUID(),
-      conversationId: currentConversationId.value || '',
+      conversationId,
       role: 'assistant',
       content: token,
       createdAt: new Date().toISOString(),
     };
   }
 
-  // 初始化监听器
   function setupListeners() {
-    if (listenersInitialized) {
-      console.log('[ChatStore] 监听器已初始化，跳过');
-      return;
-    }
-    listenersInitialized = true;
+    if (listenersInitialized.value) return;
+    listenersInitialized.value = true;
 
-    console.log('[ChatStore] 初始化监听器');
     setupChatListeners({
-      onToken: (token: string) => {
+      onToken: (data: { conversationId: string; token: string }) => {
+        const { conversationId, token } = data;
+        if (conversationId !== currentConversationId.value) {
+          return;
+        }
         const lastMsg = messages.value[messages.value.length - 1];
         if (lastMsg?.role === 'assistant') {
           lastMsg.content += token;
         } else {
-          messages.value.push(createAssistantMessage(token));
+          messages.value.push(createAssistantMessage(token, conversationId));
         }
       },
       onToolCall: () => {},
-      onDone: () => {
-        console.log('[ChatStore] 完成');
-        isLoading.value = false;
-        // 完成消息后检查是否需要压缩
-        messageCount.value += 2; // user + assistant
-        checkAndCompress();
+      onDone: (data: { conversationId: string }) => {
+        console.log('[ChatStore] onDone:', data.conversationId);
+        // 更新对话状态
+        const conv = conversations.value.find(c => c.id === data.conversationId);
+        if (conv) {
+          conv.status = 'idle';
+        }
+        // 仅当是当前对话时，才更新 messageCount 和检查压缩
+        if (data.conversationId === currentConversationId.value) {
+          isLoading.value = false;
+          messageCount.value += 2;
+          checkAndCompress();
+        }
       },
-      onError: (msg: string) => {
-        console.error('[ChatStore] 错误:', msg);
-        isLoading.value = false;
-        messages.value.push({
-          id: crypto.randomUUID(),
-          conversationId: currentConversationId.value || '',
-          role: 'assistant',
-          content: `错误：${msg}`,
-          createdAt: new Date().toISOString(),
+      onError: (data: { conversationId: string; error: string }) => {
+        console.log('[ChatStore] onError:', data.conversationId);
+        // 更新对话状态
+        const conv = conversations.value.find(c => c.id === data.conversationId);
+        if (conv) {
+          conv.status = 'idle';
+        }
+        // 仅当是当前对话时，才追加错误消息
+        if (data.conversationId === currentConversationId.value) {
+          isLoading.value = false;
+          messages.value.push({
+            id: crypto.randomUUID(),
+            conversationId: currentConversationId.value || '',
+            role: 'assistant',
+            content: `错误：${data.error}`,
+            createdAt: new Date().toISOString(),
+          });
+        }
+      },
+      onMessagesSynced: (data: { conversationId: string; newMessages: unknown[] }) => {
+        if (data.conversationId !== currentConversationId.value) {
+          return;
+        }
+        const currentIds = new Set(messages.value.map(m => m.id));
+        (data.newMessages as Message[]).forEach(msg => {
+          if (!currentIds.has(msg.id)) {
+            messages.value.push(msg);
+          }
         });
       },
     });
   }
 
-  // 发送消息
+  function resetListeners() {
+    listenersInitialized.value = false;
+  }
+
   async function sendMessage(content: string) {
-    // 验证有选中的对话
-    if (!currentConversationId.value) {
-      console.log('[ChatStore] 没有选中的对话，创建新对话');
-      await newConversation();
+    let convId = currentConversationId.value;
+
+    if (!convId) {
+      const conv = await chatApi.newConversation();
+      convId = conv.id;
+      currentConversationId.value = convId;
+      conversations.value.unshift({
+        ...conv,
+        status: 'loading',
+      });
+      messages.value = [];
+      messageCount.value = 0;
+    } else {
+      // 设置对话状态为 loading
+      const conv = conversations.value.find(c => c.id === convId);
+      if (conv) {
+        conv.status = 'loading';
+      }
     }
 
-    // 捕获当前的 conversationId，避免异步问题
-    const conversationId = currentConversationId.value!;
-    const myMessages = messages.value;
-
-    // 添加用户消息
-    myMessages.push({
+    const userMessage = {
       id: crypto.randomUUID(),
-      conversationId,
-      role: 'user',
+      conversationId: convId,
+      role: 'user' as const,
       content,
       createdAt: new Date().toISOString(),
-    });
+    };
+    messages.value.push(userMessage);
 
     isLoading.value = true;
 
     try {
-      await chatApi.send(conversationId, content);
+      await chatApi.send(convId, content);
+      const syncId = convId;
+      setTimeout(async () => {
+        if (currentConversationId.value !== syncId) return;
+        try {
+          const history = await chatApi.getHistory(syncId);
+          if (currentConversationId.value === syncId) {
+            messages.value = history;
+          }
+        } catch (e) {
+          // ignore
+        }
+      }, 500);
     } catch (e) {
-      console.error('[ChatStore] 发送失败:', e);
       isLoading.value = false;
-      // 发送失败时移除用户消息
-      const idx = myMessages.findIndex((m) => m.id === myMessages[myMessages.length - 1].id && m.role === 'user');
+      // 发送失败，重置对话状态
+      const conv = conversations.value.find(c => c.id === convId);
+      if (conv) {
+        conv.status = 'idle';
+      }
+      const idx = messages.value.findIndex((m) => m.id === userMessage.id);
       if (idx !== -1) {
-        myMessages.splice(idx, 1);
+        messages.value.splice(idx, 1);
       }
     }
   }
 
-  // 创建新对话
   async function newConversation() {
-    console.log('[ChatStore] 创建新对话');
-    const conv = await chatApi.newConversation();
-    currentConversationId.value = conv.id;
+    const prevId = currentConversationId.value;
+
+    if (prevId) {
+      try {
+        await chatApi.endConversation(prevId);
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    currentConversationId.value = null;
     messages.value = [];
+    messageCount.value = 0;
+    isLoading.value = false;
+
+    if (prevId) {
+      const conv = conversations.value.find(c => c.id === prevId);
+      if (conv) {
+        conv.endedAt = new Date().toISOString();
+        conv.status = 'completed';
+      }
+    }
     await loadConversations();
-    return conv;
   }
 
-  // 加载对话列表
   async function loadConversations() {
     const data = await chatApi.getConversations();
-    console.log('[ChatStore] 加载对话列表，原始数据:', JSON.stringify(data));
-    // 验证并转换数据，确保 createdAt 是有效的
-    conversations.value = data.map((conv: any) => ({
-      id: conv.id || '',
-      name: conv.name || '新对话',
-      summary: conv.summary,
-      createdAt: conv.createdAt || new Date().toISOString(),
-      updatedAt: conv.updatedAt || new Date().toISOString(),
-      endedAt: conv.endedAt || undefined,
-    }));
-    console.log('[ChatStore] 转换后数据:', JSON.stringify(conversations.value));
+    const filtered = data
+      .filter((conv: any) => conv.endedAt)
+      .map((conv: any) => ({
+        id: conv.id || '',
+        name: conv.name || '新对话',
+        status: 'idle' as const,
+        summary: conv.summary,
+        createdAt: conv.createdAt || new Date().toISOString(),
+        updatedAt: conv.updatedAt || new Date().toISOString(),
+        endedAt: conv.endedAt || undefined,
+      }))
+      .sort((a: Conversation, b: Conversation) => {
+        return new Date(b.endedAt || 0).getTime() - new Date(a.endedAt || 0).getTime();
+      });
+    conversations.value = filtered;
   }
 
-  // 选择对话
   async function selectConversation(id: string) {
-    console.log('[ChatStore] 选择对话:', id);
-
-    // 先更新 ID
+    // 切换前不关闭对话
     currentConversationId.value = id;
-
-    // 清空当前消息，防止闪烁
     messages.value = [];
+    messageCount.value = 0;
 
-    // 等待消息加载完成
     const history = await chatApi.getHistory(id);
     messages.value = history;
     messageCount.value = history.length;
 
-    console.log('[ChatStore] 加载消息数:', messages.value.length);
-  }
-
-  // 删除对话
-  async function deleteConversation(id: string) {
-    await chatApi.deleteConversation(id);
-    await loadConversations();
-    // 如果删除的是当前对话，切换到第一个或创建新的
-    if (currentConversationId.value === id) {
-      if (conversations.value.length > 0) {
-        await selectConversation(conversations.value[0].id);
-      } else {
-        await newConversation();
-      }
+    // 根据对话状态恢复加载状态
+    const conv = conversations.value.find(c => c.id === id);
+    if (conv) {
+      conv.endedAt = undefined;
+      isLoading.value = conv.status === 'loading';
+    } else {
+      isLoading.value = false;
     }
   }
 
-  // 切换历史侧边栏
+  async function deleteConversation(id: string) {
+    await chatApi.deleteConversation(id);
+    await loadConversations();
+    if (currentConversationId.value === id) {
+      currentConversationId.value = null;
+      messages.value = [];
+      messageCount.value = 0;
+      isLoading.value = false;
+    }
+  }
+
   function toggleHistory() {
     showHistory.value = !showHistory.value;
   }
 
-  // 检查并压缩对话
   async function checkAndCompress() {
     if (!currentConversationId.value) return;
     if (messageCount.value > 0 && messageCount.value % 20 === 0) {
-      console.log('[ChatStore] 触发自动压缩，消息数:', messageCount.value);
       try {
         const result = await chatApi.compressConversation(currentConversationId.value);
         if (result) {
-          console.log('[ChatStore] 压缩完成，摘要:', result.summary);
+          await loadConversations();
         }
       } catch (e) {
-        console.error('[ChatStore] 压缩失败:', e);
+        // ignore
       }
     }
   }
 
-  // 结束当前对话
   async function endCurrentConversation() {
     if (!currentConversationId.value) return;
+    const prevId = currentConversationId.value;
     try {
       await chatApi.endConversation(currentConversationId.value);
-      await loadConversations();
+      currentConversationId.value = null;
+      messages.value = [];
+      messageCount.value = 0;
+      isLoading.value = false;
+      const conv = conversations.value.find(c => c.id === prevId);
+      if (conv) {
+        conv.endedAt = new Date().toISOString();
+        conv.status = 'completed';
+      }
     } catch (e) {
-      console.error('[ChatStore] 结束对话失败:', e);
+      // ignore
     }
   }
 
   return {
-    // 状态
     messages,
     conversations,
     currentConversationId,
     isLoading,
     showHistory,
-    // 计算属性
     currentConversation,
     currentTitle,
-    // 方法
     setupListeners,
+    resetListeners,
     sendMessage,
     newConversation,
     loadConversations,

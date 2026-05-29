@@ -6,14 +6,7 @@ const chatStore = useChatStore();
 const { conversations, currentConversationId } = storeToRefs(chatStore);
 
 function formatTimeRange(startAt: string, endedAt?: string): string {
-  const start = formatDate(startAt);
-
-  if (endedAt) {
-    const end = formatTime(endedAt);
-    return `${start} - ${end}`;
-  }
-
-  return `${start} - 进行中`;
+  return formatDate(startAt);
 }
 
 function formatDate(dateStr: string) {
@@ -71,11 +64,14 @@ function handleDelete(e: Event, id: string) {
       <li
         v-for="conv in conversations"
         :key="conv.id"
-        :class="['item', { active: conv.id === currentConversationId, ended: !!conv.endedAt }]"
+        :class="['item', { active: conv.id === currentConversationId, ended: !!conv.endedAt, loading: conv.status === 'loading' }]"
         @click="handleSelect(conv.id)"
       >
         <div class="conv-info">
-          <span class="name">{{ conv.name || '新对话' }}</span>
+          <span class="name">
+            <span v-if="conv.status === 'loading'" class="loading-indicator"></span>
+            {{ conv.name || '新对话' }}
+          </span>
           <div class="time-info">
             <span class="time">{{ formatTimeRange(conv.createdAt, conv.endedAt) }}</span>
           </div>
@@ -156,7 +152,7 @@ function handleDelete(e: Event, id: string) {
 }
 
 .item.ended .name {
-  font-style: italic;
+  color: #000;
 }
 
 .item.active .date {
@@ -195,6 +191,27 @@ function handleDelete(e: Event, id: string) {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.item.loading {
+  opacity: 1;
+  background: rgba(79, 70, 229, 0.1);
+}
+
+.loading-indicator {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--color-primary, #4f46e5);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .delete-btn {

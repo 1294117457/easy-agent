@@ -216,6 +216,12 @@ export class SQLiteAdapter implements IStoragePort {
     };
   }
 
+  // 刷新对话的 updated_at（用于排序）
+  touchConversation(id: string): void {
+    const now = new Date().toISOString();
+    this.db.prepare(`UPDATE conversations SET updated_at = ? WHERE id = ?`).run(now, id);
+  }
+
   listConversations(): Conversation[] {
     const rows = this.db
       .prepare(`SELECT * FROM conversations ORDER BY updated_at DESC`)
@@ -299,24 +305,58 @@ export class SQLiteAdapter implements IStoragePort {
   }
 
   listPrompts(): Prompt[] {
-    return this.db
+    const rows = this.db
       .prepare(`SELECT * FROM prompts ORDER BY is_builtin DESC, is_active DESC, created_at DESC`)
-      .all() as Prompt[];
+      .all() as any[];
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      description: row.description || undefined,
+      systemPrompt: row.system_prompt,  // 映射 snake_case 到 camelCase
+      isBuiltin: !!row.is_builtin,
+      isActive: !!row.is_active,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    })) as Prompt[];
   }
 
   getActivePrompt(): Prompt | null {
     const rows = this.db
       .prepare(`SELECT * FROM prompts WHERE is_active = 1 LIMIT 1`)
-      .all() as Prompt[];
-    return rows.length > 0 ? rows[0] : null;
+      .all() as any[];
+    if (rows.length === 0) {
+      console.log('[SQLite] getActivePrompt: 没有找到激活的 Prompt');
+      return null;
+    }
+    const row = rows[0];
+    console.log('[SQLite] getActivePrompt:', {
+      id: row.id,
+      name: row.name,
+      is_active: row.is_active,
+      system_prompt: row.system_prompt?.substring(0, 50)
+    });
+    return {
+      id: row.id,
+      name: row.name,
+      description: row.description || undefined,
+      systemPrompt: row.system_prompt,  // 映射 snake_case 到 camelCase
+      isBuiltin: !!row.is_builtin,
+      isActive: !!row.is_active,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
   }
 
   setActivePrompt(id: string): void {
+    console.log('[SQLite] setActivePrompt:', id);
     // 取消所有激活状态
     this.db.prepare(`UPDATE prompts SET is_active = 0`).run();
     // 设置目标为激活
     this.db.prepare(`UPDATE prompts SET is_active = 1, updated_at = ? WHERE id = ?`)
       .run(new Date().toISOString(), id);
+    // 验证
+    const row = this.db.prepare(`SELECT is_active FROM prompts WHERE id = ?`).get(id) as any;
+    console.log('[SQLite] setActivePrompt 验证, id:', id, 'is_active:', row?.is_active);
   }
 
   updatePrompt(id: string, data: Partial<Prompt>): boolean {

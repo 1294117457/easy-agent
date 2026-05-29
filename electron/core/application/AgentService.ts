@@ -20,46 +20,38 @@ export class AgentService {
     userInput: string,
     callbacks: SendMessageCallbacks
   ) {
-    console.log('[AgentService] sendMessage 开始, conversationId:', conversationId);
+    console.log('[AgentService] sendMessage 被调用');
+    console.log('[AgentService] conversationId:', conversationId);
     console.log('[AgentService] userInput:', userInput);
-    console.log('[AgentService] 当前模型:', this.llmPort.provider, this.llmPort.model);
 
     // 获取当前激活的 Prompt
     const activePrompt = this.storagePort.getActivePrompt();
+    console.log('[AgentService] activePrompt:', JSON.stringify(activePrompt));
     const systemPrompt = activePrompt?.systemPrompt || '';
-
-    if (!systemPrompt) {
-      console.warn('[AgentService] 警告：没有配置 System Prompt');
-    }
+    console.log('[AgentService] systemPrompt:', JSON.stringify(systemPrompt));
+    console.log('[AgentService] systemPrompt.length:', systemPrompt.length);
 
     // 获取历史消息
     const history = this.storagePort.getMessages(conversationId);
-    const historyWithoutCurrent = history.slice(0, -1);
-    const recentHistory = historyWithoutCurrent.slice(-10);
-
-    console.log('[AgentService] 历史消息数量:', historyWithoutCurrent.length, '，使用:', recentHistory.length);
+    console.log('[AgentService] 历史消息数:', history.length);
 
     // 构建 langchain 消息（历史）
-    const langchainMessages: BaseMessage[] = recentHistory.map((m) =>
+    const langchainMessages = history.slice(-10).map((m) =>
       m.role === 'user'
         ? new HumanMessage(m.content)
         : new AIMessage(m.content)
     );
 
-    // 关键：添加当前用户消息
+    // 添加当前用户消息
     langchainMessages.push(new HumanMessage(userInput));
 
     // 构建最终消息列表
-    const allMessages: BaseMessage[] = [
+    const allMessages = [
       ...(systemPrompt ? [new SystemMessage(systemPrompt)] : []),
       ...langchainMessages,
     ];
 
     console.log('[AgentService] 发送给 LLM 的消息数:', allMessages.length);
-    console.log('[AgentService] 消息内容:', JSON.stringify(allMessages.map(m => ({
-      role: m.getType(),
-      content: (m.content as string).substring(0, 50)
-    }))));
 
     // 持久化用户消息
     this.storagePort.appendMessage({
@@ -69,19 +61,15 @@ export class AgentService {
     });
 
     try {
-      let tokenCount = 0;
+      console.log('[AgentService] 调用 LLM...');
       const result = await this.llmPort.invokeStream(
         allMessages,
         (token) => {
-          tokenCount++;
-          if (tokenCount <= 3) {
-            console.log('[AgentService] token', tokenCount, ':', JSON.stringify(token));
-          }
           callbacks.onToken(token);
         }
       );
 
-      console.log('[AgentService] LLM 返回完成，总 token 数:', tokenCount);
+      console.log('[AgentService] LLM 返回完成');
 
       this.storagePort.appendMessage({
         conversationId,
@@ -91,6 +79,7 @@ export class AgentService {
       });
 
       callbacks.onDone();
+      console.log('[AgentService] 发送完成');
     } catch (err: unknown) {
       console.error('[AgentService] 错误:', err);
       const msg = err instanceof Error ? err.message : String(err);

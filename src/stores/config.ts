@@ -53,9 +53,13 @@ export const useConfigStore = defineStore('config', () => {
       apiKeys.value = config.apiKeys || [];
       prompts.value = config.prompts || [];
 
-      // 查找激活的 API Key
-      const activeKey = config.apiKeys?.find((k: any) => k.enabled);
-      activeKeyId.value = activeKey?.id || null;
+      // 查找激活的 API Key（优先从 llmConfig.keyId 获取）
+      if (config.llmConfig?.keyId) {
+        activeKeyId.value = config.llmConfig.keyId;
+      } else {
+        const activeKey = config.apiKeys?.find((k: any) => k.enabled);
+        activeKeyId.value = activeKey?.id || null;
+      }
 
       // 查找激活的 Prompt
       const activePrompt = config.prompts?.find((p: any) => p.isActive);
@@ -70,12 +74,25 @@ export const useConfigStore = defineStore('config', () => {
   // 加载 LLM 配置
   async function loadLLMConfig() {
     try {
-      const [providerList, config] = await Promise.all([
+      const [providerList, config, activePrompt] = await Promise.all([
         configApi.listProviders(),
         configApi.getActiveLLMConfig(),
+        configApi.getActivePrompt(),
       ]);
       providers.value = providerList;
       llmConfig.value = config;
+      // 同步 activeKeyId
+      if (config?.keyId) {
+        activeKeyId.value = config.keyId;
+      }
+      // 同步 activePromptId
+      if (activePrompt?.id) {
+        activePromptId.value = activePrompt.id;
+        // 同时更新 prompts 中的 isActive 标志
+        prompts.value.forEach((p) => {
+          p.isActive = p.id === activePrompt.id;
+        });
+      }
     } catch (error) {
       console.error('[ConfigStore] 加载 LLM 配置失败:', error);
     }
@@ -106,7 +123,12 @@ export const useConfigStore = defineStore('config', () => {
   // 设置默认 API Key
   async function setActiveKey(keyId: string) {
     await configApi.setActiveKey(keyId);
-    await loadLLMConfig();
+    // 更新本地状态
+    apiKeys.value.forEach((k) => {
+      k.enabled = k.id === keyId;
+    });
+    activeKeyId.value = keyId;
+    llmConfig.value = { ...llmConfig.value, keyId };
   }
 
   // 创建 Prompt
@@ -135,12 +157,15 @@ export const useConfigStore = defineStore('config', () => {
 
   // 设置激活的 Prompt
   async function setActivePrompt(id: string) {
+    console.log('[ConfigStore] setActivePrompt 被调用, id:', id);
     await configApi.setActivePrompt(id);
+    console.log('[ConfigStore] setActivePrompt API 调用完成');
     // 更新本地状态
     prompts.value.forEach((p) => {
       p.isActive = p.id === id;
     });
     activePromptId.value = id;
+    console.log('[ConfigStore] setActivePrompt 完成, activePromptId:', activePromptId.value);
   }
 
   // 测试连接

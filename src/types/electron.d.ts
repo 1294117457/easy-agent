@@ -14,15 +14,20 @@ interface ElectronAPI {
   deleteConversation(conversationId: string): Promise<boolean>;
   compressConversation(conversationId: string): Promise<{ summary: string; title: string } | null>;
   endConversation(conversationId: string): Promise<void>;
-  onToken(callback: (token: string) => void): void;
-  onDone(callback: () => void): void;
-  onError(callback: (error: string) => void): void;
+  onToken(callback: (data: { conversationId: string; token: string }) => void): void;
+  onDone(callback: (data: { conversationId: string }) => void): void;
+  onError(callback: (data: { conversationId: string; error: string }) => void): void;
+  onMessagesSynced(callback: (data: { conversationId: string; newMessages: unknown[] }) => void): void;  // ✅ 新增
 
   // LLM 相关
   setActiveKey(keyId: string): Promise<void>;
   getActiveLLMConfig(): Promise<{ keyId: string; provider: string; model: string } | null>;
   listLLMProviders(): Promise<Array<{ id: string; name: string; models: string[] }>>;
   testLLMConnection(data: { provider: string; apiKey: string; model: string; baseURL?: string }): Promise<{ success: boolean; message?: string }>;
+
+  // 调试用
+  getListenerCount(): { token: number; done: number; error: number; messagesSynced: number };
+  resetListenerCounters(): void;
 }
 
 declare global {

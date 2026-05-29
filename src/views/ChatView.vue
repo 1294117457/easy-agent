@@ -1,23 +1,25 @@
 <script setup lang="ts">
 import { onMounted } from 'vue';
 import { useChatStore } from '@/stores/chat';
+import { useConfigStore } from '@/stores/config';
 import ConversationList from '@/components/chat/ConversationList.vue';
 import MessageList from '@/components/chat/MessageList.vue';
 import InputArea from '@/components/chat/InputArea.vue';
 import ChatHeader from '@/components/chat/ChatHeader.vue';
 
 const chatStore = useChatStore();
+const configStore = useConfigStore();
 
 onMounted(async () => {
+  // 加载配置和聊天数据
+  await Promise.all([
+    configStore.loadConfig(),
+    configStore.loadLLMConfig(),
+    chatStore.loadConversations(),
+  ]);
+
   chatStore.setupListeners();
-  await chatStore.loadConversations();
-  // 如果没有对话，创建新对话
-  if (chatStore.conversations.length === 0) {
-    await chatStore.newConversation();
-  } else {
-    // 默认选中第一个对话
-    await chatStore.selectConversation(chatStore.conversations[0].id);
-  }
+  // 不自动创建对话，等待用户发送第一条消息
 });
 </script>
 

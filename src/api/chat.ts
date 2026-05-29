@@ -1,12 +1,18 @@
 export function setupChatListeners(callbacks: {
   onToken: (token: string) => void;
-  onToolCall: (data: { serverId: string; toolName: string; args: unknown }) => void;
-  onDone: () => void;
-  onError: (msg: string) => void;
+      onToolCall: (data: { serverId: string; toolName: string; args: unknown }) => void;
+      onDone: (data: { conversationId: string }) => void;
+      onError: (data: { conversationId: string; error: string }) => void;
+  onMessagesSynced?: (data: { conversationId: string; newMessages: unknown[] }) => void;  // ✅ 新增
 }) {
   window.electronAPI.onToken(callbacks.onToken);
   window.electronAPI.onDone(callbacks.onDone);
   window.electronAPI.onError(callbacks.onError);
+
+  // ✅ 新增：消息同步事件
+  if (callbacks.onMessagesSynced) {
+    window.electronAPI.onMessagesSynced(callbacks.onMessagesSynced);
+  }
 }
 
 export const chatApi = {

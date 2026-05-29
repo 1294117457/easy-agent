@@ -44,7 +44,9 @@ export function registerConfigHandlers(
 
   // 设置/获取激活的 Prompt
   ipcMain.handle('config:prompt:setActive', (_, id: string) => {
+    console.log('[ConfigHandler] setActivePrompt 被调用, id:', id);
     storage.setActivePrompt(id);
+    console.log('[ConfigHandler] setActivePrompt 完成');
     return true;
   });
 

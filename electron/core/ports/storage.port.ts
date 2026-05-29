@@ -45,6 +45,7 @@ export interface IStoragePort {
   appendMessage(data: AppendMessageDTO): Message;
   deleteConversation(id: string): boolean;
   renameConversation(id: string, name: string): boolean;
+  touchConversation(id: string): void;  // 新增：刷新对话的 updated_at
   compressConversation(id: string, summary: string): boolean;
   endConversation(id: string, title: string): boolean;
   getMessageCount(convId: string): number;
