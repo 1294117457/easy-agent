@@ -1,10 +1,25 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
-import { useConfigStore } from '@/stores/config';
-import { useRouter } from 'vue-router';
 
-const configStore = useConfigStore();
-const router = useRouter();
+interface Option {
+  id: string;
+  label: string;
+  subLabel?: string;
+}
+
+const props = defineProps<{
+  label: string;
+  value: string;
+  options: Option[];
+  activeId?: string;
+  footerText?: string;
+  emptyText?: string;
+}>();
+
+const emit = defineEmits<{
+  select: [id: string];
+  'footer-click': [];
+}>();
 
 const showDropdown = ref(false);
 const btnRef = ref<HTMLButtonElement | null>(null);
@@ -15,8 +30,8 @@ const dropdownStyle = computed(() => {
   return {
     position: 'fixed' as const,
     top: `${rect.bottom + 4}px`,
-    right: `${window.innerWidth - rect.right}px`,
     left: `${rect.left}px`,
+    right: `${window.innerWidth - rect.right}px`,
   };
 });
 
@@ -28,43 +43,44 @@ function closeDropdown() {
   showDropdown.value = false;
 }
 
-async function selectPrompt(id: string) {
-  await configStore.setActivePrompt(id);
+function handleSelect(id: string) {
+  emit('select', id);
   closeDropdown();
 }
 
-function goToSettings() {
-  closeDropdown();
-  router.push('/settings?tab=prompt');
-}
+const activeLabel = computed(() => {
+  const found = props.options.find((o) => o.id === props.activeId);
+  return found ? found.label : props.value;
+});
 </script>
 
 <template>
   <div class="selector-wrapper">
     <button ref="btnRef" class="selector-btn" @click.stop="toggleDropdown">
-      <span class="label">Prompt:</span>
-      <span class="value">{{ configStore.activePrompt?.name || '默认' }}</span>
+      <span class="label">{{ label }}:</span>
+      <span class="value">{{ activeLabel }}</span>
       <span class="arrow">▼</span>
     </button>
 
     <Teleport to="body">
       <div v-if="showDropdown" class="dropdown-overlay" @click="closeDropdown">
         <div class="dropdown-panel" :style="dropdownStyle" @click.stop>
-          <div class="section-title">选择 Prompt</div>
+          <div class="section-title">{{ label }}</div>
           <div
-            v-for="p in configStore.prompts"
-            :key="p.id"
-            :class="['dropdown-item', { active: p.id === configStore.activePromptId }]"
-            @click="selectPrompt(p.id)"
+            v-for="opt in options"
+            :key="opt.id"
+            :class="['dropdown-item', { active: opt.id === activeId }]"
+            @click="handleSelect(opt.id)"
           >
-            <span class="radio">{{ p.id === configStore.activePromptId ? '●' : '○' }}</span>
-            <span class="name">{{ p.name }}</span>
+            <span class="radio">{{ opt.id === activeId ? '●' : '○' }}</span>
+            <span class="name">{{ opt.label }}</span>
+            <span v-if="opt.subLabel" class="sub">{{ opt.subLabel }}</span>
           </div>
-          <div v-if="configStore.prompts.length === 0" class="empty-hint">
-            暂未配置 Prompt
+          <div v-if="options.length === 0" class="empty-hint">
+            {{ emptyText ?? '暂无数据' }}
           </div>
-          <div class="dropdown-footer" @click="goToSettings">
-            📝 前往设置页面管理 Prompt
+          <div v-if="footerText" class="dropdown-footer" @click="$emit('footer-click')">
+            {{ footerText }}
           </div>
         </div>
       </div>
@@ -101,7 +117,7 @@ function goToSettings() {
 .value {
   font-weight: 500;
   color: var(--color-text, #1a1a1a);
-  max-width: 80px;
+  max-width: 100px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -166,6 +182,11 @@ function goToSettings() {
 .name {
   flex: 1;
   font-weight: 500;
+}
+
+.sub {
+  font-size: 11px;
+  color: var(--color-text-secondary, #999);
 }
 
 .empty-hint {

@@ -2,12 +2,12 @@
 import { useChatStore } from '@/stores/chat';
 import { storeToRefs } from 'pinia';
 import { watch, nextTick, ref } from 'vue';
+import LoadingSpinner from '@/components/common/LoadingSpinner.vue';
 
 const chatStore = useChatStore();
 const { messages, isLoading } = storeToRefs(chatStore);
 const messageListRef = ref<HTMLElement>();
 
-// 自动滚动到底部
 watch(messages, async () => {
   await nextTick();
   if (messageListRef.value) {
@@ -18,13 +18,11 @@ watch(messages, async () => {
 
 <template>
   <div ref="messageListRef" class="message-list">
-    <!-- 空状态 -->
     <div v-if="messages.length === 0" class="empty-state">
       <p>你好！我是 EasyAgent</p>
       <p>告诉我你想做什么，我来帮你完成。</p>
     </div>
 
-    <!-- 消息列表 -->
     <div
       v-for="msg in messages"
       :key="msg.id"
@@ -33,11 +31,8 @@ watch(messages, async () => {
       <div class="bubble">{{ msg.content }}</div>
     </div>
 
-    <!-- 加载中 -->
     <div v-if="isLoading" class="loading">
-      <span class="dot" />
-      <span class="dot" />
-      <span class="dot" />
+      <LoadingSpinner type="dots" />
     </div>
   </div>
 </template>
@@ -100,21 +95,5 @@ watch(messages, async () => {
   display: flex;
   gap: 4px;
   padding: 4px;
-}
-
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--color-text-secondary, #999);
-  animation: bounce 1.4s ease-in-out infinite both;
-}
-
-.dot:nth-child(1) { animation-delay: -0.32s; }
-.dot:nth-child(2) { animation-delay: -0.16s; }
-
-@keyframes bounce {
-  0%, 80%, 100% { transform: scale(0); }
-  40% { transform: scale(1); }
 }
 </style>

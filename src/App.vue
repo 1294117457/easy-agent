@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { RouterView } from 'vue-router';
 import { useConfigStore } from '@/stores/config';
-import Sidebar from './components/Sidebar.vue';
+import Sidebar from './layout/Sidebar.vue';
 
-// 初始化配置
 const configStore = useConfigStore();
 configStore.loadConfig();
 configStore.loadLLMConfig();
@@ -25,13 +24,14 @@ configStore.loadLLMConfig();
 
 <style scoped>
 .app-layout {
-  display: grid;
-  grid-template-columns: 200px 1fr 240px;
+  display: flex;
   height: 100vh;
   overflow: hidden;
 }
 .main-content {
+  flex: 1;
   overflow: auto;
+  min-width: 0;
 }
 .agent-panel {
   background: var(--color-bg-elevated, #f5f5f5);
@@ -40,6 +40,8 @@ configStore.loadLLMConfig();
   align-items: flex-start;
   justify-content: center;
   padding-top: 24px;
+  flex-shrink: 0;
+  width: 240px;
 }
 .pet-placeholder {
   padding: 16px;

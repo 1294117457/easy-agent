@@ -8,10 +8,10 @@ const router = createRouter({
   history: createWebHashHistory(),
   routes: [
     { path: '/', redirect: '/chat' },
-    { path: '/chat', component: () => import('./views/ChatView.vue') },
-    { path: '/flow', component: () => import('./views/FlowView.vue') },
-    { path: '/plugins', component: () => import('./views/PluginView.vue') },
-    { path: '/settings', component: () => import('./views/SettingsView.vue') },
+    { path: '/chat', component: () => import('./views/chat/ChatView.vue') },
+    { path: '/flow', component: () => import('./views/flow/FlowView.vue') },
+    { path: '/plugins', component: () => import('./views/plugin/PluginView.vue') },
+    { path: '/settings', component: () => import('./views/settings/SettingsView.vue') },
   ],
 });
 
