@@ -202,7 +202,6 @@ function handleSelect(key: string) {
 
 .collapsed .item-left,
 .collapsed .item-right {
-  width: 24px;
   flex-direction: column;
   align-items: center;
   justify-content: center;

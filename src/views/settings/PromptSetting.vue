@@ -36,8 +36,8 @@ function handleDeletePrompt(id: string) {
       </div>
     </div>
 
+    <h4>已配置的 Prompt</h4>
     <div class="subsection">
-      <h4>已配置的 Prompt</h4>
       <div class="prompt-list">
         <div
           v-for="p in configStore.prompts"
@@ -74,14 +74,25 @@ function handleDeletePrompt(id: string) {
 </template>
 
 <style scoped>
-.prompt-setting h3 {
+.prompt-setting {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.prompt-setting > h3 {
   font-size: 20px;
   font-weight: 600;
   margin-bottom: 24px;
   color: var(--color-text, #1a1a1a);
+  flex-shrink: 0;
 }
 
 .subsection {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   margin-bottom: 32px;
 }
 

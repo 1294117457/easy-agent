@@ -148,9 +148,8 @@ function getProviderIcon(provider: string) {
         {{ testResult.success ? '✅ 连接成功！' : `❌ 连接失败: ${testResult.message}` }}
       </div>
     </div>
-
+    <h4>已配置的 API Key</h4>
     <div class="subsection">
-      <h4>已配置的 API Key</h4>
       <div class="api-keys-list">
         <div
           v-for="key in configStore.apiKeys"
@@ -181,6 +180,9 @@ function getProviderIcon(provider: string) {
 <style scoped>
 .apikey-setting {
   height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .apikey-setting h3 {
@@ -191,6 +193,9 @@ function getProviderIcon(provider: string) {
 }
 
 .subsection {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   margin-bottom: 32px;
 }
 
