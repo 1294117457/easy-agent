@@ -3,6 +3,10 @@ import type { IStoragePort } from './ports/storage.port.js';
 import { AgentService } from './application/AgentService.js';
 import { CompressionService } from './application/CompressionService.js';
 import { LLMManager, type LLMProviderType } from './application/LLMManager.js';
+import { McpManager } from './adapters/mcp/mcp.manager.js';
+import { PluginService } from './application/PluginService.js';
+import { WorkflowNodeService } from './application/WorkflowNodeService.js';
+import { WorkflowService } from './application/WorkflowService.js';
 
 export class EasyAgentCore {
   private llmPort: ILLMPort | null = null;
@@ -11,9 +15,21 @@ export class EasyAgentCore {
   private agentService: AgentService | null = null;
   private compressionService: CompressionService | null = null;
 
+  // MCP 相关服务
+  private mcpManager: McpManager;
+  private pluginService: PluginService;
+  private nodeService: WorkflowNodeService;
+  private workflowService: WorkflowService;
+
   constructor(storage: IStoragePort) {
     this.storagePort = storage;
     this.llmManager = new LLMManager();
+
+    // 初始化 MCP 相关服务
+    this.mcpManager = new McpManager();
+    this.pluginService = new PluginService(storage, this.mcpManager);
+    this.nodeService = new WorkflowNodeService(this.mcpManager);
+    this.workflowService = new WorkflowService(this.nodeService);
 
     this.initializeLLM();
   }
@@ -105,6 +121,23 @@ export class EasyAgentCore {
 
   getCompressionService(): CompressionService | null {
     return this.compressionService;
+  }
+
+  // MCP 相关服务 Getter
+  getMcpManager(): McpManager {
+    return this.mcpManager;
+  }
+
+  getPluginService(): PluginService {
+    return this.pluginService;
+  }
+
+  getNodeService(): WorkflowNodeService {
+    return this.nodeService;
+  }
+
+  getWorkflowService(): WorkflowService {
+    return this.workflowService;
   }
 
   async compressConversation(conversationId: string) {

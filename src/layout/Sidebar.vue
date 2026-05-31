@@ -12,8 +12,8 @@ const router = useRouter();
 
 const items: TabItem[] = [
   { key: '/chat', label: '对话', icon: '💬' },
-  { key: '/flow', label: '工作流', icon: '🔀' },
   { key: '/plugins', label: '插件', icon: '🔌' },
+  { key: '/workflow', label: '工作流', icon: '🔀' },
   { key: '/settings', label: '设置', icon: '⚙️' },
 ];
 

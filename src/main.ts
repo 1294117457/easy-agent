@@ -9,8 +9,8 @@ const router = createRouter({
   routes: [
     { path: '/', redirect: '/chat' },
     { path: '/chat', component: () => import('./views/chat/ChatView.vue') },
-    { path: '/flow', component: () => import('./views/flow/FlowView.vue') },
     { path: '/plugins', component: () => import('./views/plugin/PluginView.vue') },
+    { path: '/workflow', component: () => import('./views/workflow/WorkflowView.vue') },
     { path: '/settings', component: () => import('./views/settings/SettingsView.vue') },
   ],
 });

@@ -65,11 +65,40 @@ export interface Prompt {
 export interface McpServer {
   id: string;
   name: string;
-  type: 'stdio' | 'sse';
+  type: 'stdio' | 'sse' | 'http';
   command?: string;
+  args?: string[];
+  env?: Record<string, string>;
   url?: string;
+  headers?: Record<string, string>;
   enabled: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
+
+// MCP Config 解析类型（对应 .mcp.json 格式）
+export interface McpConfigServer {
+  type?: 'stdio' | 'http';
+  url?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+}
+
+export interface McpConfigInput {
+  type: 'promptString';
+  id: string;
+  description: string;
+  password?: boolean;
+}
+
+export interface McpConfig {
+  servers: Record<string, McpConfigServer>;
+  inputs?: McpConfigInput[];
+}
+
+export type CreateMcpServerDTO = Omit<McpServer, 'id' | 'createdAt' | 'updatedAt'>;
 
 export interface McpTool {
   id: string;

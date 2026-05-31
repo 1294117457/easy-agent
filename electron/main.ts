@@ -4,6 +4,12 @@ import { mkdirSync } from 'fs';
 import { EasyAgentCore } from './core/index.js';
 import { SQLiteAdapter } from './core/adapters/storage/sqlite.adapter.js';
 import { registerConfigHandlers } from './ipc/config.handler.js';
+import {
+  registerMcpHandlers,
+  registerPluginHandlers,
+  registerWorkflowNodeHandlers,
+  registerWorkflowHandlers,
+} from './ipc/workflow.handler.js';
 
 let mainWindow: BrowserWindow | null = null;
 let core: EasyAgentCore | null = null;
@@ -111,6 +117,12 @@ function createWindow(): void {
   if (core) {
     registerChatHandlers(ipcMain, core, mainWindow);
     registerConfigHandlers(ipcMain, core.getStorage(), core);
+
+    // 注册 MCP/Plugin/Workflow handlers
+    registerMcpHandlers(core.getMcpManager(), core.getPluginService());
+    registerPluginHandlers(core.getPluginService());
+    registerWorkflowNodeHandlers(core.getNodeService());
+    registerWorkflowHandlers(core.getWorkflowService(), core.getNodeService());
   }
 }
 

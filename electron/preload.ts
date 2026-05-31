@@ -97,4 +97,48 @@ contextBridge.exposeInMainWorld('electronAPI', {
     messagesSyncedCount = 0;
     console.log('[Preload] Counters reset');
   },
+
+  // MCP 相关 API
+  mcpConnect: (server: any) => ipcRenderer.invoke('mcp:connect', server),
+  mcpDisconnect: (serverId: string) => ipcRenderer.invoke('mcp:disconnect', serverId),
+  mcpIsConnected: (serverId: string) => ipcRenderer.invoke('mcp:isConnected', serverId),
+  mcpListTools: (serverId: string) => ipcRenderer.invoke('mcp:listTools', serverId),
+  mcpCallTool: (serverId: string, toolName: string, args: any) =>
+    ipcRenderer.invoke('mcp:callTool', serverId, toolName, args),
+  mcpParseConfig: (configText: string) => ipcRenderer.invoke('mcp:parseConfig', configText),
+  mcpConnectWithConfig: (configText: string, inputValues: Record<string, string>) =>
+    ipcRenderer.invoke('mcp:connectWithConfig', configText, inputValues),
+
+  // Plugin 相关 API
+  pluginCreate: (data: any) => ipcRenderer.invoke('plugin:create', data),
+  pluginList: () => ipcRenderer.invoke('plugin:list'),
+  pluginGet: (id: string) => ipcRenderer.invoke('plugin:get', id),
+  pluginDelete: (id: string) => ipcRenderer.invoke('plugin:delete', id),
+
+  // WorkflowNode 相关 API
+  nodeCreate: (data: any) => ipcRenderer.invoke('node:create', data),
+  nodeExecute: (nodeId: string, input: any) => ipcRenderer.invoke('node:execute', nodeId, input),
+  nodeList: () => ipcRenderer.invoke('node:list'),
+  nodeListByPlugin: (pluginId: string) => ipcRenderer.invoke('node:listByPlugin', pluginId),
+  nodeUpdate: (id: string, data: any) => ipcRenderer.invoke('node:update', id, data),
+  nodeDelete: (id: string) => ipcRenderer.invoke('node:delete', id),
+
+  // Workflow 相关 API
+  workflowCreate: (data: any) => ipcRenderer.invoke('workflow:create', data),
+  workflowList: () => ipcRenderer.invoke('workflow:list'),
+  workflowGet: (id: string) => ipcRenderer.invoke('workflow:get', id),
+  workflowAddNode: (workflowId: string, nodeId: string) =>
+    ipcRenderer.invoke('workflow:addNode', workflowId, nodeId),
+  workflowRemoveNode: (workflowId: string, nodeId: string) =>
+    ipcRenderer.invoke('workflow:removeNode', workflowId, nodeId),
+  workflowConnect: (workflowId: string, sourceNodeId: string, sourceField: string, targetNodeId: string, targetField: string) =>
+    ipcRenderer.invoke('workflow:connect', workflowId, sourceNodeId, sourceField, targetNodeId, targetField),
+  workflowDisconnect: (workflowId: string, edgeId: string) =>
+    ipcRenderer.invoke('workflow:disconnect', workflowId, edgeId),
+  workflowValidate: (workflowId: string) => ipcRenderer.invoke('workflow:validate', workflowId),
+  workflowExecute: (workflowId: string, input: any) =>
+    ipcRenderer.invoke('workflow:execute', workflowId, input),
+  workflowUpdate: (id: string, data: any) => ipcRenderer.invoke('workflow:update', id, data),
+  workflowDelete: (id: string) => ipcRenderer.invoke('workflow:delete', id),
+  workflowGetNodes: (workflowId: string) => ipcRenderer.invoke('workflow:getNodes', workflowId),
 });
