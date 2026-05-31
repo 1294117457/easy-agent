@@ -119,7 +119,7 @@ function createWindow(): void {
     registerConfigHandlers(ipcMain, core.getStorage(), core);
 
     // 注册 MCP/Plugin/Workflow handlers
-    registerMcpHandlers(core.getMcpManager(), core.getPluginService());
+    registerMcpHandlers(core.getMcpServerService(), core.getPluginService());
     registerPluginHandlers(core.getPluginService());
     registerWorkflowNodeHandlers(core.getNodeService());
     registerWorkflowHandlers(core.getWorkflowService(), core.getNodeService());

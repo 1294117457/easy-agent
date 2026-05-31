@@ -2,26 +2,14 @@
 import { ref, computed, onMounted } from 'vue';
 import { useWorkflowStore } from '@/stores/workflow';
 import { workflowApi } from '@/api/workflow';
-import type { McpServer, McpTool, McpConfig, McpConfigInput } from '@/stores/workflow';
+import type { McpServer, McpConfig, McpConfigInput } from '@/stores/workflow';
 
 const workflowStore = useWorkflowStore();
 
 // ========== 状态 ==========
 
 const servers = computed(() => workflowStore.mcpServers);
-const connectedServers = computed(() => workflowStore.connectedServers);
-const serverToolsMap = computed(() => workflowStore.serverTools);
 const plugins = computed(() => workflowStore.plugins);
-
-// 用于本地跟踪连接的服务器（避免修改 computed）
-const localConnectedServers = ref<Set<string>>(new Set());
-
-const availableServers = computed(() => {
-  // 合并 store 和本地的连接状态
-  const allConnected = new Set(workflowStore.connectedServers);
-  localConnectedServers.value.forEach(id => allConnected.add(id));
-  return servers.value.filter(s => allConnected.has(s.id));
-});
 
 // ========== 简化配置模式 ==========
 
@@ -71,40 +59,27 @@ async function connectWithConfig() {
 
   try {
     console.log('[Frontend] Calling workflowApi.mcpConnectWithConfig...');
-    // 直接调用 API，使用普通对象确保可序列化
-    const result = await workflowApi.mcpConnectWithConfig(
+    const result = await workflowStore.connectWithConfig(
       configText.value,
       { ...inputValues.value }
     );
     console.log('[Frontend] Result received:', JSON.stringify(result, null, 2));
     if (result.success) {
-      // 将新连接的服务器添加到本地状态
+      let hasError = false;
       for (const serverResult of result.results || []) {
-        if (serverResult.success) {
-          // 添加到连接列表
-          localConnectedServers.value.add(serverResult.id);
-
-          // 添加到服务器列表 - 使用 workflowStore 的方法
-          const newServer = {
-            id: serverResult.id,
-            name: serverResult.name,
-            type: 'http' as const,
-            enabled: true,
-          };
-          await workflowStore.addMcpServer(newServer);
-
-          // 刷新工具列表
-          await workflowStore.refreshServerTools(serverResult.id);
-        } else {
+        if (!serverResult.success) {
           parsingError.value = `连接 ${serverResult.name} 失败: ${serverResult.error}`;
+          hasError = true;
         }
       }
 
-      // 清空表单
-      configText.value = '';
-      parsedConfig.value = null;
-      requiredInputs.value = [];
-      inputValues.value = {};
+      if (!hasError) {
+        // 清空表单
+        configText.value = '';
+        parsedConfig.value = null;
+        requiredInputs.value = [];
+        inputValues.value = {};
+      }
     } else {
       parsingError.value = result.error || '连接失败';
     }
@@ -126,27 +101,50 @@ function clearConfig() {
 
 // ========== MCP Server 操作 ==========
 
-async function handleConnect(server: McpServer) {
-  const result = await workflowStore.connectMcpServer(server);
+async function handleConnect(serverId: string) {
+  const result = await workflowStore.connectMcpServer(serverId);
   if (!result.success) {
     alert(`连接失败: ${result.error}`);
   }
 }
 
 async function handleDisconnect(serverId: string) {
-  await workflowStore.disconnectMcpServer(serverId);
+  const result = await workflowStore.disconnectMcpServer(serverId);
+  if (!result.success) {
+    alert(`断开失败: ${result.error}`);
+  }
+}
+
+async function handleReconnect(serverId: string) {
+  const result = await workflowStore.reconnectMcpServer(serverId);
+  if (!result.success) {
+    alert(`重新连接失败: ${result.error}`);
+  }
 }
 
 async function handleDeleteServer(serverId: string) {
   if (confirm('确定要删除这个 MCP Server 吗？')) {
-    await workflowStore.removeMcpServer(serverId);
+    const result = await workflowStore.removeMcpServer(serverId);
+    if (!result.success) {
+      alert(`删除失败: ${result.error}`);
+    }
   }
 }
 
-function isConnected(serverId: string): boolean {
-  // 检查 store 和本地连接状态
-  if (workflowStore.connectedServers.has(serverId)) return true;
-  return localConnectedServers.value.has(serverId);
+async function handleSaveServer(server: McpServer) {
+  const result = await workflowStore.updateMcpServer(server.id, {
+    name: server.name,
+    type: server.type,
+    url: server.url,
+    command: server.command,
+    args: server.args,
+    env: server.env,
+    headers: server.headers,
+    enabled: server.enabled,
+  });
+  if (!result.success) {
+    alert(`保存失败: ${result.error}`);
+  }
 }
 
 // ========== Plugin 操作 ==========
@@ -161,14 +159,17 @@ const pluginForm = ref({
 
 const selectedServerTools = computed(() => {
   if (!pluginForm.value.serverId) return [];
-  return serverToolsMap.value.get(pluginForm.value.serverId) || [];
+  const server = servers.value.find(s => s.id === pluginForm.value.serverId);
+  return server?.tools || [];
 });
 
 function openPluginForm() {
+  // 只显示已连接的服务器
+  const connected = servers.value.filter(s => s.isConnected);
   pluginForm.value = {
     name: '',
     description: '',
-    serverId: availableServers.value[0]?.id || '',
+    serverId: connected[0]?.id || '',
     toolNames: [],
   };
   showPluginForm.value = true;
@@ -283,7 +284,8 @@ onMounted(async () => {
     <!-- MCP Server 列表 -->
     <div class="section">
       <div class="section-header">
-        <h4>已连接的 MCP Servers</h4>
+        <h4>MCP Servers</h4>
+        <button @click="workflowStore.loadMcpServers()" class="secondary">刷新</button>
       </div>
 
       <div class="server-list">
@@ -295,8 +297,11 @@ onMounted(async () => {
           <div class="server-info">
             <div class="server-header">
               <span class="server-name">{{ server.name }}</span>
-              <span :class="['status-badge', isConnected(server.id) ? 'connected' : 'disconnected']">
-                {{ isConnected(server.id) ? '已连接' : '未连接' }}
+              <span :class="['status-badge', server.isConnected ? 'connected' : 'disconnected']">
+                {{ server.isConnected ? '已连接' : (server.status === 'error' ? '错误' : '未连接') }}
+              </span>
+              <span v-if="server.hasError" class="error-hint" :title="server.lastError">
+                !
               </span>
             </div>
             <div class="server-detail">
@@ -304,16 +309,17 @@ onMounted(async () => {
               <span v-if="server.url">URL: {{ server.url }}</span>
               <span v-if="server.command">命令: {{ server.command }}</span>
             </div>
-            <div v-if="isConnected(server.id)" class="tool-count">
-              发现 {{ serverToolsMap.get(server.id)?.length || 0 }} 个工具
+            <div v-if="server.isConnected" class="tool-count">
+              发现 {{ server.tools.length }} 个工具
             </div>
           </div>
           <div class="server-actions">
-            <template v-if="isConnected(server.id)">
+            <template v-if="server.isConnected">
               <button @click="handleDisconnect(server.id)" class="disconnect-btn">断开</button>
             </template>
             <template v-else>
-              <button @click="handleConnect(server)" class="connect-btn">连接</button>
+              <button @click="handleConnect(server.id)" class="connect-btn">连接</button>
+              <button @click="handleReconnect(server.id)" class="secondary">重连</button>
             </template>
             <button @click="handleDeleteServer(server.id)" class="danger">删除</button>
           </div>
@@ -325,7 +331,7 @@ onMounted(async () => {
     <div class="section">
       <div class="section-header">
         <h4>Plugins</h4>
-        <button @click="openPluginForm()" :disabled="availableServers.length === 0" class="primary">
+        <button @click="openPluginForm()" :disabled="!servers.some(s => s.isConnected)" class="primary">
           + 创建 Plugin
         </button>
       </div>
@@ -349,7 +355,7 @@ onMounted(async () => {
         </div>
       </div>
 
-      <div v-if="availableServers.length === 0" class="hint">
+      <div v-if="!servers.some(s => s.isConnected)" class="hint">
         请先连接一个 MCP Server 才能创建 Plugin
       </div>
     </div>
@@ -370,9 +376,9 @@ onMounted(async () => {
         </div>
 
         <div class="form-group">
-          <label>选择 MCP Server</label>
+          <label>选择已连接的 MCP Server</label>
           <select v-model="pluginForm.serverId">
-            <option v-for="server in availableServers" :key="server.id" :value="server.id">
+            <option v-for="server in servers.filter(s => s.isConnected)" :key="server.id" :value="server.id">
               {{ server.name }}
             </option>
           </select>
@@ -391,7 +397,7 @@ onMounted(async () => {
               <span class="tool-desc">{{ tool.description }}</span>
             </label>
             <div v-if="selectedServerTools.length === 0" class="empty-hint">
-              请先连接一个 MCP Server
+              请先选择一个已连接的 MCP Server
             </div>
           </div>
         </div>
@@ -582,6 +588,20 @@ onMounted(async () => {
 .status-badge.disconnected {
   background: #fee2e2;
   color: #991b1b;
+}
+
+.error-hint {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #dc2626;
+  color: #fff;
+  font-size: 12px;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: help;
 }
 
 .server-detail {

@@ -1,4 +1,4 @@
-import type { McpServer, McpTool } from '../domain/types.js';
+import type { McpTool } from '../domain/types.js';
 
 export interface ToolCallEvent {
   serverId: string;
@@ -6,8 +6,19 @@ export interface ToolCallEvent {
   arguments: Record<string, unknown>;
 }
 
+export interface McpConnectionConfig {
+  id: string;
+  name: string;
+  type: 'stdio' | 'sse' | 'http';
+  url?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+}
+
 export interface IMcpPort {
-  connect(server: McpServer): Promise<void>;
+  connect(server: McpConnectionConfig): Promise<void>;
   disconnect(serverId: string): Promise<void>;
   isConnected(serverId: string): boolean;
   listTools(serverId: string): Promise<McpTool[]>;

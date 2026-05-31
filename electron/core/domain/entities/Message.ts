@@ -11,11 +11,21 @@ export interface MessageProps {
   isCompressed?: boolean;
 }
 
+export interface MessageJSON {
+  id: string;
+  conversationId: string;
+  role: MessageRole;
+  content: string;
+  model?: string;
+  createdAt: string;
+  isCompressed: boolean;
+}
+
 export class Message {
   public readonly id: string;
   public readonly conversationId: string;
   public readonly role: MessageRole;
-  public readonly content: string;
+  public content: string;
   public readonly model?: string;
   public readonly createdAt: string;
   public isCompressed: boolean;
@@ -80,6 +90,50 @@ export class Message {
    */
   isSummary(): boolean {
     return this.isCompressed;
+  }
+
+  /**
+   * 创建系统消息
+   */
+  static createSystem(conversationId: string, content: string): Message {
+    return new Message({
+      conversationId,
+      role: 'system',
+      content,
+    });
+  }
+
+  /**
+   * 是否为系统消息
+   */
+  isSystem(): boolean {
+    return this.role === 'system';
+  }
+
+  // ============ 序列化方法 ============
+
+  static fromJSON(json: MessageJSON): Message {
+    return new Message({
+      id: json.id,
+      conversationId: json.conversationId,
+      role: json.role,
+      content: json.content,
+      model: json.model,
+      createdAt: json.createdAt,
+      isCompressed: json.isCompressed,
+    });
+  }
+
+  toJSON(): MessageJSON {
+    return {
+      id: this.id,
+      conversationId: this.conversationId,
+      role: this.role,
+      content: this.content,
+      model: this.model,
+      createdAt: this.createdAt,
+      isCompressed: this.isCompressed,
+    };
   }
 
   /**

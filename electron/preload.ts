@@ -99,12 +99,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // MCP 相关 API
-  mcpConnect: (server: any) => ipcRenderer.invoke('mcp:connect', server),
-  mcpDisconnect: (serverId: string) => ipcRenderer.invoke('mcp:disconnect', serverId),
-  mcpIsConnected: (serverId: string) => ipcRenderer.invoke('mcp:isConnected', serverId),
-  mcpListTools: (serverId: string) => ipcRenderer.invoke('mcp:listTools', serverId),
-  mcpCallTool: (serverId: string, toolName: string, args: any) =>
-    ipcRenderer.invoke('mcp:callTool', serverId, toolName, args),
+  mcpList: () => ipcRenderer.invoke('mcp:list'),
+  mcpGet: (id: string) => ipcRenderer.invoke('mcp:get', id),
+  mcpSave: (data: any) => ipcRenderer.invoke('mcp:save', data),
+  mcpUpdate: (id: string, updates: any) => ipcRenderer.invoke('mcp:update', id, updates),
+  mcpDelete: (id: string) => ipcRenderer.invoke('mcp:delete', id),
+  mcpConnect: (id: string) => ipcRenderer.invoke('mcp:connect', id),
+  mcpDisconnect: (id: string) => ipcRenderer.invoke('mcp:disconnect', id),
+  mcpReconnect: (id: string) => ipcRenderer.invoke('mcp:reconnect', id),
+  mcpIsConnected: (id: string) => ipcRenderer.invoke('mcp:isConnected', id),
+  mcpListTools: (id: string) => ipcRenderer.invoke('mcp:listTools', id),
+  mcpCallTool: (id: string, toolName: string, args: any) =>
+    ipcRenderer.invoke('mcp:callTool', id, toolName, args),
   mcpParseConfig: (configText: string) => ipcRenderer.invoke('mcp:parseConfig', configText),
   mcpConnectWithConfig: (configText: string, inputValues: Record<string, string>) =>
     ipcRenderer.invoke('mcp:connectWithConfig', configText, inputValues),

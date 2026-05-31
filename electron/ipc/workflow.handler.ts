@@ -1,49 +1,142 @@
 import { ipcMain } from 'electron';
-import type { McpManager } from '../core/adapters/mcp/mcp.manager.js';
+import type { McpServerService } from '../core/application/McpServerService.js';
+import type { McpServer } from '../core/domain/entities/McpServer.js';
 import type { PluginService } from '../core/application/PluginService.js';
 import type { WorkflowNodeService } from '../core/application/WorkflowNodeService.js';
 import type { WorkflowService } from '../core/application/WorkflowService.js';
-import type { McpServer, McpConfig, McpConfigInput } from '../core/domain/types.js';
+import type { McpServerProps } from '../core/domain/entities/McpServer.js';
 
 export function registerMcpHandlers(
-  mcpManager: McpManager,
+  mcpServerService: McpServerService,
   pluginService: PluginService
 ): void {
-  ipcMain.handle('mcp:connect', async (_, server: McpServer) => {
+  // ============ CRUD ============
+
+  // 获取所有服务器（带状态）
+  ipcMain.handle('mcp:list', async () => {
     try {
-      await mcpManager.connect(server);
+      const servers = await mcpServerService.listServers();
+      return { success: true, servers };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  // 获取单个服务器
+  ipcMain.handle('mcp:get', async (_, id: string) => {
+    try {
+      const server = await mcpServerService.getServer(id);
+      if (!server) {
+        return { success: false, error: 'Server not found' };
+      }
+      return { success: true, server };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  // 保存/创建服务器
+  ipcMain.handle('mcp:save', async (_, data: {
+    id?: string;
+    name: string;
+    type: 'stdio' | 'sse' | 'http';
+    url?: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    headers?: Record<string, string>;
+    enabled?: boolean;
+  }) => {
+    try {
+      const props: McpServerProps = {
+        name: data.name,
+        type: data.type,
+        url: data.url,
+        command: data.command,
+        args: data.args,
+        env: data.env,
+        headers: data.headers,
+        enabled: data.enabled ?? true,
+      };
+      const server = await mcpServerService.saveServer(props, data.id);
+      return { success: true, server: server.toJSON() };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  // 更新服务器
+  ipcMain.handle('mcp:update', async (_, id: string, updates: Partial<McpServerProps>) => {
+    try {
+      const server = await mcpServerService.updateServer(id, updates);
+      if (!server) {
+        return { success: false, error: 'Server not found' };
+      }
+      return { success: true, server: server.toJSON() };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  // 删除服务器
+  ipcMain.handle('mcp:delete', async (_, id: string) => {
+    try {
+      await mcpServerService.deleteServer(id);
       return { success: true };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
   });
 
-  ipcMain.handle('mcp:disconnect', async (_, serverId: string) => {
+  // ============ 连接管理 ============
+
+  // 连接服务器
+  ipcMain.handle('mcp:connect', async (_, id: string) => {
     try {
-      await mcpManager.disconnect(serverId);
+      const result = await mcpServerService.connectServer(id);
+      return result;
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  // 断开连接
+  ipcMain.handle('mcp:disconnect', async (_, id: string) => {
+    try {
+      await mcpServerService.disconnectServer(id);
       return { success: true };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
   });
 
-  ipcMain.handle('mcp:isConnected', async (_, serverId: string) => {
-    return mcpManager.isConnected(serverId);
+  // 重新连接
+  ipcMain.handle('mcp:reconnect', async (_, id: string) => {
+    try {
+      const result = await mcpServerService.reconnectServer(id);
+      return result;
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
   });
 
-  ipcMain.handle('mcp:listTools', async (_, serverId: string) => {
+  // 检查连接状态
+  ipcMain.handle('mcp:isConnected', async (_, id: string) => {
+    const server = await mcpServerService.getServer(id);
+    return server?.isConnected ?? false;
+  });
+
+  // 获取工具列表
+  ipcMain.handle('mcp:listTools', async (_, id: string) => {
     try {
-      const tools = await pluginService.discoverTools(serverId);
-      // 确保工具列表可序列化 - 递归清理所有不可序列化的属性
+      const tools = await pluginService.discoverTools(id);
       const serializeTools = (items: unknown[]): unknown[] => {
         return items.map(item => {
           if (item && typeof item === 'object') {
             const serialized: Record<string, unknown> = {};
             for (const [key, value] of Object.entries(item as Record<string, unknown>)) {
-              // 跳过函数和不可序列化的属性
               if (typeof value === 'function') continue;
               if (value && typeof value === 'object') {
-                // 递归序列化嵌套对象
                 serialized[key] = serializeTools([value])[0];
               } else {
                 serialized[key] = value;
@@ -60,112 +153,50 @@ export function registerMcpHandlers(
     }
   });
 
+  // 调用工具
   ipcMain.handle('mcp:callTool', async (_, serverId: string, toolName: string, args: Record<string, unknown>) => {
     try {
-      const result = await mcpManager.callTool(serverId, toolName, args);
-      // 确保结果是可序列化的
+      const result = await mcpServerService.callTool(serverId, toolName, args);
       return { success: true, result: JSON.parse(JSON.stringify(result)) };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
   });
 
-  // 解析 MCP Config
+  // ============ 配置解析 ============
+
+  // 解析配置
   ipcMain.handle('mcp:parseConfig', async (_, configText: string) => {
     try {
-      const config = mcpManager.parseMcpConfig(configText);
-      // 确保配置可序列化
+      const config = mcpServerService.parseConfig(configText);
       return { success: true, config: JSON.parse(JSON.stringify(config)) };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
   });
 
-  // 解析并连接 MCP Config
-  ipcMain.handle('mcp:connectWithConfig', async (_, configText, inputValues) => {
-    console.log('[IPC] ★ mcp:connectWithConfig CALLED');
-    console.log('[IPC] configText type:', typeof configText);
-    console.log('[IPC] configText:', configText);
-    console.log('[IPC] inputValues:', JSON.stringify(inputValues));
-    
+  // 解析并连接
+  ipcMain.handle('mcp:connectWithConfig', async (_, configText: string, inputValues: Record<string, string>) => {
     try {
-      // 1. 解析配置
-      const config = mcpManager.parseMcpConfig(configText);
-      console.log('[IPC] Parsed config successfully');
-
-      // 2. 解析 inputs（替换占位符）
-      const resolvedConfig = mcpManager.resolveInputs(config, inputValues);
-      console.log('[IPC] Resolved config:', JSON.stringify(resolvedConfig, null, 2));
-
-      // 3. 获取需要的 inputs
-      const requiredInputs = mcpManager.getRequiredInputs(config);
-
-      // 4. 为每个 server 创建连接
-      const results: { id: string; name: string; success: boolean; error?: string }[] = [];
-
-      for (const [name, serverConfig] of Object.entries(resolvedConfig.servers)) {
-        const serverId = `mcp_${Date.now()}_${name}`;
-        const server: McpServer = {
-          id: serverId,
-          name: serverConfig.type === 'http' ? name : name,
-          type: serverConfig.type === 'stdio' ? 'stdio' : (serverConfig.type || 'http'),
-          command: serverConfig.command,
-          args: serverConfig.args,
-          env: serverConfig.env,
-          url: serverConfig.url,
-          headers: serverConfig.headers,
-          enabled: true,
-        };
-
-        console.log('[IPC] Connecting server:', JSON.stringify(server, null, 2));
-
-        try {
-          await mcpManager.connect(server);
-          results.push({ id: serverId, name, success: true });
-          console.log('[IPC] Successfully connected to:', name);
-        } catch (error) {
-          // 安全地提取错误信息
-          let errorMessage = 'Unknown error';
-          try {
-            errorMessage = error instanceof Error ? error.message : String(error);
-          } catch (e) {
-            errorMessage = 'Error extracting message';
-          }
-          console.error('[IPC] Failed to connect to', name, ':', errorMessage);
-          results.push({ id: serverId, name, success: false, error: errorMessage });
-        }
-      }
-
-      // 构建返回对象
-      const returnObj = {
-        success: true as const,
-        results: results.map(r => ({
-          id: r.id,
-          name: r.name,
-          success: r.success,
-          error: r.error
-        })),
-        requiredInputs: requiredInputs.map(i => ({
-          type: i.type,
-          id: i.id,
-          description: i.description,
-          password: i.password
-        }))
-      };
-      
-      console.log('[IPC] Return object:', JSON.stringify(returnObj).substring(0, 200));
-      return returnObj;
+      const result = await mcpServerService.connectWithConfig(configText, inputValues);
+      return result;
     } catch (error) {
-      let errorMessage = 'Unknown error';
-      try {
-        errorMessage = error instanceof Error ? error.message : String(error);
-      } catch (e) {
-        errorMessage = 'Error extracting message';
-      }
-      console.error('[IPC] mcp:connectWithConfig error:', errorMessage);
-      return { success: false, error: errorMessage };
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
   });
+}
+
+export async function callTool(
+  serverId: string,
+  toolName: string,
+  args: Record<string, unknown>,
+  mcpServerService: McpServerService
+): Promise<unknown> {
+  const server = await mcpServerService.getServer(serverId);
+  if (!server || !server.isConnected) {
+    throw new Error(`Server ${serverId} is not connected`);
+  }
+  return mcpServerService.callTool(serverId, toolName, args);
 }
 
 export function registerPluginHandlers(pluginService: PluginService): void {

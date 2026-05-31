@@ -123,6 +123,15 @@ export class SQLiteAdapter implements IStoragePort {
   private db: Database.Database;
   private encryptor: KeyEncryptor;
 
+  // 暴露给新的 Repository Adapter 使用
+  getDatabase(): Database.Database {
+    return this.db;
+  }
+
+  getDecryptor(): (encrypted: string) => string {
+    return (encrypted: string) => this.encryptor.decrypt(encrypted);
+  }
+
   constructor(dbPath: string, masterPassword: string) {
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
@@ -160,6 +169,24 @@ export class SQLiteAdapter implements IStoragePort {
     // Migration: add is_compressed column to messages
     try {
       this.db.exec(`ALTER TABLE messages ADD COLUMN is_compressed INTEGER DEFAULT 0`);
+    } catch (e) {
+      // Column already exists, ignore
+    }
+    // Migration: add headers column to mcp_servers
+    try {
+      this.db.exec(`ALTER TABLE mcp_servers ADD COLUMN headers TEXT`);
+    } catch (e) {
+      // Column already exists, ignore
+    }
+    // Migration: add env column to mcp_servers
+    try {
+      this.db.exec(`ALTER TABLE mcp_servers ADD COLUMN env TEXT`);
+    } catch (e) {
+      // Column already exists, ignore
+    }
+    // Migration: add args column to mcp_servers
+    try {
+      this.db.exec(`ALTER TABLE mcp_servers ADD COLUMN args TEXT`);
     } catch (e) {
       // Column already exists, ignore
     }
@@ -446,8 +473,14 @@ export class SQLiteAdapter implements IStoragePort {
   createMcpServer(data: Omit<McpServer, 'id'>): McpServer {
     const id = uuidv4();
     this.db
-      .prepare(`INSERT INTO mcp_servers (id, name, type, command, url, enabled) VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(id, data.name, data.type, data.command || null, data.url || null, data.enabled ? 1 : 0);
+      .prepare(`INSERT INTO mcp_servers (id, name, type, command, url, headers, env, args, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(
+        id, data.name, data.type, data.command || null, data.url || null,
+        data.headers ? JSON.stringify(data.headers) : null,
+        data.env ? JSON.stringify(data.env) : null,
+        data.args ? JSON.stringify(data.args) : null,
+        data.enabled ? 1 : 0
+      );
     return { id, ...data };
   }
 

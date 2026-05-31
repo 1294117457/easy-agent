@@ -1,8 +1,8 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { IMcpPort } from '../../ports/mcp.port.js';
-import type { McpServer, McpTool, McpConfig, McpConfigServer } from '../types.js';
+import type { IMcpPort, McpConnectionConfig } from '../../ports/mcp.port.js';
+import type { McpTool } from '../types.js';
 
 interface ConnectedServer {
   client: Client;
@@ -14,41 +14,41 @@ export class McpManager implements IMcpPort {
   private toolCallCallbacks: Set<(event: import('../../ports/mcp.port.js').ToolCallEvent) => void> = new Set();
   private disconnectCallbacks: Set<(serverId: string) => void> = new Set();
 
-  async connect(server: McpServer): Promise<void> {
-    if (this.servers.has(server.id)) {
-      console.log(`[McpManager] Server ${server.id} already connected`);
+  async connect(config: McpConnectionConfig): Promise<void> {
+    if (this.servers.has(config.id)) {
+      console.log(`[McpManager] Server ${config.id} already connected`);
       return;
     }
 
     let client: Client;
     let transport: StdioClientTransport | StreamableHTTPClientTransport;
 
-    if (server.type === 'stdio') {
-      if (!server.command) {
-        throw new Error(`Server ${server.id} missing command for stdio connection`);
+    if (config.type === 'stdio') {
+      if (!config.command) {
+        throw new Error(`Server ${config.id} missing command for stdio connection`);
       }
 
-      console.log(`[McpManager] Connecting to ${server.id} via stdio: ${server.command}`);
+      console.log(`[McpManager] Connecting to ${config.id} via stdio: ${config.command}`);
       transport = new StdioClientTransport({
-        command: server.command,
-        args: server.args || [],
-        env: server.env || {},
+        command: config.command,
+        args: config.args || [],
+        env: config.env || {},
       });
-    } else if (server.type === 'sse' || server.type === 'http') {
-      if (!server.url) {
-        throw new Error(`Server ${server.id} missing url for http connection`);
+    } else if (config.type === 'sse' || config.type === 'http') {
+      if (!config.url) {
+        throw new Error(`Server ${config.id} missing url for http connection`);
       }
 
-      console.log(`[McpManager] Connecting to ${server.id} via HTTP: ${server.url}`);
-      console.log(`[McpManager] Headers:`, server.headers);
+      console.log(`[McpManager] Connecting to ${config.id} via HTTP: ${config.url}`);
+      console.log(`[McpManager] Headers:`, config.headers);
 
-      transport = new StreamableHTTPClientTransport(new URL(server.url), {
+      transport = new StreamableHTTPClientTransport(new URL(config.url), {
         requestInit: {
-          headers: server.headers || {},
+          headers: config.headers || {},
         },
       });
     } else {
-      throw new Error(`Unsupported server type: ${server.type}`);
+      throw new Error(`Unsupported server type: ${config.type}`);
     }
 
     client = new Client({
@@ -57,12 +57,12 @@ export class McpManager implements IMcpPort {
     });
 
     try {
-      console.log(`[McpManager] Starting connection to ${server.id}...`);
+      console.log(`[McpManager] Starting connection to ${config.id}...`);
       await client.connect(transport);
-      console.log(`[McpManager] Successfully connected to server: ${server.id} (${server.type})`);
-      this.servers.set(server.id, { client, transport });
+      console.log(`[McpManager] Successfully connected to server: ${config.id} (${config.type})`);
+      this.servers.set(config.id, { client, transport });
     } catch (error) {
-      console.error(`[McpManager] Failed to connect to ${server.id}:`, error);
+      console.error(`[McpManager] Failed to connect to ${config.id}:`, error);
       throw error;
     }
   }

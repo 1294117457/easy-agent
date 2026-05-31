@@ -1,6 +1,15 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
-import { workflowApi } from '@/api/workflow';
+import { workflowApi, type McpServerInput } from '@/api/workflow';
+
+export interface McpTool {
+  id: string;
+  serverId: string;
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  enabled: boolean;
+}
 
 export interface McpServer {
   id: string;
@@ -12,15 +21,15 @@ export interface McpServer {
   url?: string;
   headers?: Record<string, string>;
   enabled: boolean;
-}
-
-export interface McpTool {
-  id: string;
-  serverId: string;
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-  enabled: boolean;
+  status: 'disconnected' | 'connecting' | 'connected' | 'error';
+  isConnected: boolean;
+  isConnecting: boolean;
+  hasError: boolean;
+  lastError?: string;
+  connectedAt?: string;
+  toolCount: number;
+  tools: McpTool[];
+  createdAt: string;
 }
 
 export interface Plugin {
@@ -92,63 +101,47 @@ export interface McpConfig {
 }
 
 export const useWorkflowStore = defineStore('workflow', () => {
-  // MCP Server 状态
+  // ============ MCP Server 状态 ============
   const mcpServers = ref<McpServer[]>([]);
-  const connectedServers = ref<Set<string>>(new Set());
-  const serverTools = ref<Map<string, McpTool[]>>(new Map());
+  const mcpLoading = ref(false);
 
-  // Plugin 状态
+  // ============ Plugin 状态 ============
   const plugins = ref<Plugin[]>([]);
 
-  // WorkflowNode 状态
+  // ============ WorkflowNode 状态 ============
   const nodes = ref<WorkflowNode[]>([]);
 
-  // Workflow 状态
+  // ============ Workflow 状态 ============
   const workflows = ref<Workflow[]>([]);
   const currentWorkflow = ref<Workflow | null>(null);
   const currentWorkflowNodes = ref<WorkflowNode[]>([]);
   const currentWorkflowEdges = ref<WorkflowEdge[]>([]);
 
-  // 加载状态
+  // ============ 加载状态 ============
   const loading = ref(false);
   const executing = ref(false);
 
-  // ========== MCP Server 操作 ==========
+  // ============ MCP Server CRUD ============
 
   async function loadMcpServers() {
-    // 从配置或数据库加载已保存的 MCP Server
-    // 暂时使用内存存储
-    return mcpServers.value;
-  }
-
-  async function addMcpServer(server: Omit<McpServer, 'id'>) {
-    const newServer: McpServer = {
-      ...server,
-      id: `mcp_${Date.now()}`,
-    };
-    mcpServers.value.push(newServer);
-    return newServer;
-  }
-
-  async function removeMcpServer(id: string) {
-    if (connectedServers.value.has(id)) {
-      await disconnectMcpServer(id);
-    }
-    mcpServers.value = mcpServers.value.filter(s => s.id !== id);
-    serverTools.value.delete(id);
-  }
-
-  async function connectMcpServer(server: McpServer) {
+    mcpLoading.value = true;
     try {
-      const result = await workflowApi.mcpConnect(server);
+      const result = await workflowApi.mcpList();
       if (result.success) {
-        connectedServers.value.add(server.id);
-        // 获取工具列表
-        const toolsResult = await workflowApi.mcpListTools(server.id);
-        if (toolsResult.success) {
-          serverTools.value.set(server.id, toolsResult.tools);
-        }
-        return { success: true };
+        mcpServers.value = result.servers;
+      }
+    } catch (error) {
+      console.error('Failed to load MCP servers:', error);
+    } finally {
+      mcpLoading.value = false;
+    }
+  }
+
+  async function addMcpServer(data: McpServerInput) {
+    try {
+      const result = await workflowApi.mcpSave(data);
+      if (result.success) {
+        await loadMcpServers();
       }
       return result;
     } catch (error) {
@@ -156,36 +149,79 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
   }
 
-  async function disconnectMcpServer(serverId: string) {
+  async function updateMcpServer(id: string, updates: Partial<McpServerInput>) {
     try {
-      await workflowApi.mcpDisconnect(serverId);
-      connectedServers.value.delete(serverId);
-      return { success: true };
+      const result = await workflowApi.mcpUpdate(id, updates);
+      if (result.success) {
+        await loadMcpServers();
+      }
+      return result;
     } catch (error) {
       return { success: false, error: (error as Error).message };
     }
   }
 
-  function isServerConnected(serverId: string): boolean {
-    return connectedServers.value.has(serverId);
-  }
-
-  function getServerTools(serverId: string): McpTool[] {
-    return serverTools.value.get(serverId) || [];
-  }
-
-  async function refreshServerTools(serverId: string) {
+  async function removeMcpServer(id: string) {
     try {
-      const toolsResult = await workflowApi.mcpListTools(serverId);
-      if (toolsResult.success) {
-        serverTools.value.set(serverId, toolsResult.tools);
+      const result = await workflowApi.mcpDelete(id);
+      if (result.success) {
+        mcpServers.value = mcpServers.value.filter(s => s.id !== id);
       }
+      return result;
     } catch (error) {
-      console.error('Failed to refresh tools:', error);
+      return { success: false, error: (error as Error).message };
     }
   }
 
-  // ========== 解析 MCP Config ==========
+  // ============ MCP Server 连接 ============
+
+  async function connectMcpServer(id: string) {
+    try {
+      const result = await workflowApi.mcpConnect(id);
+      if (result.success) {
+        await loadMcpServers();
+      }
+      return result;
+    } catch (error) {
+      return { success: false, error: (error as Error).message };
+    }
+  }
+
+  async function disconnectMcpServer(id: string) {
+    try {
+      const result = await workflowApi.mcpDisconnect(id);
+      if (result.success) {
+        await loadMcpServers();
+      }
+      return result;
+    } catch (error) {
+      return { success: false, error: (error as Error).message };
+    }
+  }
+
+  async function reconnectMcpServer(id: string) {
+    try {
+      const result = await workflowApi.mcpReconnect(id);
+      if (result.success) {
+        await loadMcpServers();
+      }
+      return result;
+    } catch (error) {
+      return { success: false, error: (error as Error).message };
+    }
+  }
+
+  function isServerConnected(id: string): boolean {
+    const server = mcpServers.value.find(s => s.id === id);
+    return server?.isConnected ?? false;
+  }
+
+  function getServerTools(id: string): McpTool[] {
+    const server = mcpServers.value.find(s => s.id === id);
+    return server?.tools || [];
+  }
+
+  // ============ MCP Config ============
 
   async function parseMcpConfig(configText: string) {
     try {
@@ -202,13 +238,16 @@ export const useWorkflowStore = defineStore('workflow', () => {
   async function connectWithConfig(configText: string, inputValues: Record<string, string>) {
     try {
       const result = await workflowApi.mcpConnectWithConfig(configText, inputValues);
+      if (result.success) {
+        await loadMcpServers();
+      }
       return result;
     } catch (error) {
       return { success: false, error: (error as Error).message };
     }
   }
 
-  // ========== Plugin 操作 ==========
+  // ============ Plugin ============
 
   async function createPlugin(data: {
     name: string;
@@ -246,7 +285,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
   }
 
-  // ========== WorkflowNode 操作 ==========
+  // ============ WorkflowNode ============
 
   async function createNode(data: {
     name: string;
@@ -288,7 +327,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
   }
 
-  // ========== Workflow 操作 ==========
+  // ============ Workflow ============
 
   async function loadWorkflows() {
     try {
@@ -414,8 +453,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   return {
     // 状态
     mcpServers,
-    connectedServers,
-    serverTools,
+    mcpLoading,
     plugins,
     nodes,
     workflows,
@@ -425,29 +463,32 @@ export const useWorkflowStore = defineStore('workflow', () => {
     loading,
     executing,
 
-    // MCP Server 方法
+    // MCP Server CRUD
     loadMcpServers,
     addMcpServer,
+    updateMcpServer,
     removeMcpServer,
+
+    // MCP Server 连接
     connectMcpServer,
     disconnectMcpServer,
+    reconnectMcpServer,
     isServerConnected,
     getServerTools,
-    refreshServerTools,
     parseMcpConfig,
     connectWithConfig,
 
-    // Plugin 方法
+    // Plugin
     createPlugin,
     loadPlugins,
     deletePlugin,
 
-    // WorkflowNode 方法
+    // WorkflowNode
     createNode,
     loadNodes,
     deleteNode,
 
-    // Workflow 方法
+    // Workflow
     loadWorkflows,
     createWorkflow,
     selectWorkflow,

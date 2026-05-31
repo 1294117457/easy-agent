@@ -19,6 +19,18 @@ export enum ConversationStatus {
   Completed = 'completed',
 }
 
+export interface ConversationJSON {
+  id: string;
+  name: string;
+  workflowId?: string;
+  summary?: string;
+  createdAt: string;
+  updatedAt: string;
+  endedAt?: string;
+  status: ConversationStatus;
+  messageCount: number;
+}
+
 export class Conversation {
   public readonly id: string;
   public name: string;
@@ -80,6 +92,26 @@ export class Conversation {
       ...data,
       messages,
     });
+  }
+
+  /**
+   * 从 JSON 创建
+   */
+  static fromJSON(json: ConversationJSON, messages?: Message[]): Conversation {
+    const conv = new Conversation({
+      id: json.id,
+      name: json.name,
+      workflowId: json.workflowId,
+      summary: json.summary,
+      createdAt: json.createdAt,
+      updatedAt: json.updatedAt,
+      endedAt: json.endedAt,
+      messages,
+    });
+    if (json.status === ConversationStatus.Loading) {
+      conv.status = ConversationStatus.Loading;
+    }
+    return conv;
   }
 
   /**
@@ -240,6 +272,22 @@ export class Conversation {
     this._messages = messages;
   }
 
+  // ============ 序列化方法 ============
+
+  toJSON(): ConversationJSON {
+    return {
+      id: this.id,
+      name: this.name,
+      workflowId: this.workflowId,
+      summary: this.summary,
+      createdAt: this.createdAt,
+      updatedAt: this.updatedAt,
+      endedAt: this.endedAt,
+      status: this.status,
+      messageCount: this.getMessageCount(),
+    };
+  }
+
   /**
    * 转换为纯对象
    */
@@ -254,16 +302,6 @@ export class Conversation {
     status: ConversationStatus;
     messageCount: number;
   } {
-    return {
-      id: this.id,
-      name: this.name,
-      workflowId: this.workflowId,
-      summary: this.summary,
-      createdAt: this.createdAt,
-      updatedAt: this.updatedAt,
-      endedAt: this.endedAt,
-      status: this.status,
-      messageCount: this.getMessageCount(),
-    };
+    return this.toJSON();
   }
 }

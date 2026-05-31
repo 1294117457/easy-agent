@@ -4,9 +4,11 @@ import { AgentService } from './application/AgentService.js';
 import { CompressionService } from './application/CompressionService.js';
 import { LLMManager, type LLMProviderType } from './application/LLMManager.js';
 import { McpManager } from './adapters/mcp/mcp.manager.js';
+import { McpServerService } from './application/McpServerService.js';
 import { PluginService } from './application/PluginService.js';
 import { WorkflowNodeService } from './application/WorkflowNodeService.js';
 import { WorkflowService } from './application/WorkflowService.js';
+import { SQLiteMcpServerAdapter } from './adapters/persistence/SQLiteMcpServerAdapter.js';
 
 export class EasyAgentCore {
   private llmPort: ILLMPort | null = null;
@@ -17,6 +19,7 @@ export class EasyAgentCore {
 
   // MCP 相关服务
   private mcpManager: McpManager;
+  private mcpServerService: McpServerService;
   private pluginService: PluginService;
   private nodeService: WorkflowNodeService;
   private workflowService: WorkflowService;
@@ -27,6 +30,8 @@ export class EasyAgentCore {
 
     // 初始化 MCP 相关服务
     this.mcpManager = new McpManager();
+    const mcpServerAdapter = new SQLiteMcpServerAdapter(storage.getDatabase());
+    this.mcpServerService = new McpServerService(mcpServerAdapter, this.mcpManager);
     this.pluginService = new PluginService(storage, this.mcpManager);
     this.nodeService = new WorkflowNodeService(this.mcpManager);
     this.workflowService = new WorkflowService(this.nodeService);
@@ -126,6 +131,10 @@ export class EasyAgentCore {
   // MCP 相关服务 Getter
   getMcpManager(): McpManager {
     return this.mcpManager;
+  }
+
+  getMcpServerService(): McpServerService {
+    return this.mcpServerService;
   }
 
   getPluginService(): PluginService {
