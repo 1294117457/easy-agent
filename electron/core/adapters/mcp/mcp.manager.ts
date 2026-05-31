@@ -143,18 +143,18 @@ export class McpManager implements IMcpPort {
 
       // 检查是否是完整格式（包含 servers 和 inputs）
       if (config.servers && config.inputs) {
-        return config as McpConfig;
+        return JSON.parse(JSON.stringify(config)) as McpConfig;
       }
 
       // 检查是否是 servers 格式
       if (config.servers && !config.inputs) {
-        return config as McpConfig;
+        return JSON.parse(JSON.stringify(config)) as McpConfig;
       }
 
       // 兼容单个 server 格式
       if (config.type || config.url || config.command) {
         return {
-          servers: { default: config as McpConfigServer },
+          servers: { default: JSON.parse(JSON.stringify(config)) as McpConfigServer },
           inputs: [],
         };
       }

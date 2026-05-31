@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { useWorkflowStore } from '@/stores/workflow';
+import { workflowApi } from '@/api/workflow';
 import type { McpServer, McpTool, McpConfig, McpConfigInput } from '@/stores/workflow';
 
 const workflowStore = useWorkflowStore();
@@ -12,8 +13,14 @@ const connectedServers = computed(() => workflowStore.connectedServers);
 const serverToolsMap = computed(() => workflowStore.serverTools);
 const plugins = computed(() => workflowStore.plugins);
 
+// 用于本地跟踪连接的服务器（避免修改 computed）
+const localConnectedServers = ref<Set<string>>(new Set());
+
 const availableServers = computed(() => {
-  return servers.value.filter(s => connectedServers.value.has(s.id));
+  // 合并 store 和本地的连接状态
+  const allConnected = new Set(workflowStore.connectedServers);
+  localConnectedServers.value.forEach(id => allConnected.add(id));
+  return servers.value.filter(s => allConnected.has(s.id));
 });
 
 // ========== 简化配置模式 ==========
@@ -52,6 +59,8 @@ async function parseConfig() {
 }
 
 async function connectWithConfig() {
+  console.log('[Frontend] connectWithConfig called');
+  console.log('[Frontend] configText:', configText.value);
   if (!configText.value.trim()) {
     parsingError.value = '请输入 MCP Server 配置';
     return;
@@ -61,13 +70,19 @@ async function connectWithConfig() {
   parsingError.value = null;
 
   try {
-    const result = await workflowStore.connectWithConfig(configText.value, inputValues.value);
+    console.log('[Frontend] Calling workflowApi.mcpConnectWithConfig...');
+    // 直接调用 API，使用普通对象确保可序列化
+    const result = await workflowApi.mcpConnectWithConfig(
+      configText.value,
+      { ...inputValues.value }
+    );
+    console.log('[Frontend] Result received:', JSON.stringify(result, null, 2));
     if (result.success) {
       // 将新连接的服务器添加到本地状态
       for (const serverResult of result.results || []) {
         if (serverResult.success) {
           // 添加到连接列表
-          connectedServers.value.add(serverResult.id);
+          localConnectedServers.value.add(serverResult.id);
 
           // 添加到服务器列表 - 使用 workflowStore 的方法
           const newServer = {
@@ -94,6 +109,7 @@ async function connectWithConfig() {
       parsingError.value = result.error || '连接失败';
     }
   } catch (error) {
+    console.error('[Frontend] Error caught:', error);
     parsingError.value = (error as Error).message;
   } finally {
     connecting.value = false;
@@ -128,7 +144,9 @@ async function handleDeleteServer(serverId: string) {
 }
 
 function isConnected(serverId: string): boolean {
-  return connectedServers.value.has(serverId);
+  // 检查 store 和本地连接状态
+  if (workflowStore.connectedServers.has(serverId)) return true;
+  return localConnectedServers.value.has(serverId);
 }
 
 // ========== Plugin 操作 ==========

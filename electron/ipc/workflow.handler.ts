@@ -124,15 +124,44 @@ export function registerMcpHandlers(
           results.push({ id: serverId, name, success: true });
           console.log('[IPC] Successfully connected to:', name);
         } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
+          // 安全地提取错误信息
+          let errorMessage = 'Unknown error';
+          try {
+            errorMessage = error instanceof Error ? error.message : String(error);
+          } catch (e) {
+            errorMessage = 'Error extracting message';
+          }
           console.error('[IPC] Failed to connect to', name, ':', errorMessage);
           results.push({ id: serverId, name, success: false, error: errorMessage });
         }
       }
 
-      return { success: true, results, requiredInputs: JSON.parse(JSON.stringify(requiredInputs)) };
+      // 构建返回对象
+      const returnObj = {
+        success: true as const,
+        results: results.map(r => ({
+          id: r.id,
+          name: r.name,
+          success: r.success,
+          error: r.error
+        })),
+        requiredInputs: requiredInputs.map(i => ({
+          type: i.type,
+          id: i.id,
+          description: i.description,
+          password: i.password
+        }))
+      };
+      
+      console.log('[IPC] Return object:', JSON.stringify(returnObj).substring(0, 200));
+      return returnObj;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      let errorMessage = 'Unknown error';
+      try {
+        errorMessage = error instanceof Error ? error.message : String(error);
+      } catch (e) {
+        errorMessage = 'Error extracting message';
+      }
       console.error('[IPC] mcp:connectWithConfig error:', errorMessage);
       return { success: false, error: errorMessage };
     }
