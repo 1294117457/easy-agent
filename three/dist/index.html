@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>布料模拟 - 角色服装物理</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        overflow: hidden;
+        background: #1a1a2e;
+        font-family: 'Segoe UI', system-ui, sans-serif;
+      }
+      canvas {
+        display: block;
+      }
+      #info {
+        position: fixed;
+        top: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.6);
+        color: #e0e0e0;
+        padding: 10px 24px;
+        border-radius: 8px;
+        font-size: 14px;
+        pointer-events: none;
+        text-align: center;
+        line-height: 1.6;
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(255,255,255,0.1);
+      }
+      #info kbd {
+        display: inline-block;
+        background: rgba(255,255,255,0.15);
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 4px;
+        padding: 1px 6px;
+        font-family: inherit;
+        font-size: 12px;
+      }
+      #fps {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        background: rgba(0,0,0,0.5);
+        color: #4ade80;
+        padding: 4px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-family: monospace;
+        pointer-events: none;
+        backdrop-filter: blur(4px);
+      }
+    </style>
+    <script type="module" crossorigin src="/assets/index-Daudwjd5.js"></script>
+  </head>
+  <body>
+    <div id="info">
+      <kbd>W</kbd><kbd>S</kbd> 前进/后退 &nbsp;&nbsp;
+      <kbd>A</kbd><kbd>D</kbd> 左右转向 &nbsp;&nbsp;
+      <kbd>R</kbd> 重置布料
+    </div>
+    <div id="fps">-- FPS</div>
+  </body>
+</html>
