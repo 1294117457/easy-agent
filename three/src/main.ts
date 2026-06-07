@@ -104,7 +104,7 @@ const clothPos = new THREE.Vector3(0, 0, 0);
 const cloth = new Cloth(scene, 1.5, 1.5, 12, 5, clothPos);//宽，长
 
 // 给布料一个初始颜色（披风色）
-(cloth.mesh.material as THREE.MeshStandardMaterial).color.setHex(0x8833aa);//#58A0D1
+(cloth.mesh.material as THREE.MeshStandardMaterial).color.setHex(0x58A0D1);//#58A0D1
 
 // ============================================================================
 // 风力
@@ -130,6 +130,17 @@ const fpsDom = document.getElementById('fps')!;
 const camModeText = document.getElementById('cam-mode-text')!;
 let frameCount = 0;
 let fpsTime = 0;
+
+// ============================================================================
+// 滑杆控制
+// ============================================================================
+const gravitySlider = document.getElementById('gravity-slider') as HTMLInputElement;
+const gravityVal = document.getElementById('gravity-val')!;
+gravitySlider.addEventListener('input', () => {
+  const v = parseFloat(gravitySlider.value);
+  cloth.getIntegrator().setGravity(new THREE.Vector3(0, -v, 0));
+  gravityVal.textContent = v.toFixed(1);
+});
 
 // ============================================================================
 // 相机跟随参数

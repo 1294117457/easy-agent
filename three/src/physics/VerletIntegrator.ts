@@ -13,14 +13,17 @@ export class VerletIntegrator {
   private constraintIterations: number;
 
   constructor(
-    //重力调整---------------------------------------------------------------------111111111111111111111111111111111
-    gravity = new THREE.Vector3(0, -0.8, 0),
-    damping = 2.98,
-    constraintIterations = 12,
+    gravity = new THREE.Vector3(0, -9.8, 0),
+    damping = 0.98,
+    constraintIterations = 10,
   ) {
-    this.gravity = gravity;
+    this.gravity = gravity.clone();
     this.damping = damping;
     this.constraintIterations = constraintIterations;
+  }
+
+  setGravity(g: THREE.Vector3): void {
+    this.gravity.copy(g);
   }
 //////////////////////////////////////////////////////////////
   addParticle(particle: Particle): void {

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>布料模拟 - 角色服装物理</title>
+    <title>布料模拟</title>
     <style>
       * {
         margin: 0;
@@ -74,17 +74,61 @@
         color: #60a5fa;
         font-weight: bold;
       }
+      #controls {
+        position: fixed;
+        bottom: 16px;
+        left: 16px;
+        background: rgba(0, 0, 0, 0.6);
+        color: #e0e0e0;
+        padding: 12px 16px;
+        border-radius: 8px;
+        font-size: 13px;
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        min-width: 220px;
+      }
+      #controls .slider-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      #controls label {
+        min-width: 50px;
+        font-weight: 500;
+      }
+      #controls input[type="range"] {
+        flex: 1;
+        accent-color: #60a5fa;
+        cursor: pointer;
+      }
+      #controls .val {
+        min-width: 38px;
+        text-align: right;
+        color: #60a5fa;
+        font-family: monospace;
+        font-size: 12px;
+      }
     </style>
   </head>
   <body>
     <div id="info">
-      <kbd>W</kbd><kbd>S</kbd> 前进/后退 &nbsp;&nbsp;
+      <!-- <kbd>W</kbd><kbd>S</kbd> 前进/后退 &nbsp;&nbsp;
       <kbd>A</kbd><kbd>D</kbd> 左右转向 &nbsp;&nbsp;
       <kbd>R</kbd> 重置布料 &nbsp;&nbsp;
-      <kbd>C</kbd> 切换相机模式
+      <kbd>C</kbd> 切换相机模式 -->
     </div>
     <div id="fps">-- FPS</div>
-    <div id="camera-mode">相机: <span id="cam-mode-text">手动旋转</span></div>
+    <div id="controls">
+      <div class="slider-row">
+        <label>重力</label>
+        <input type="range" id="gravity-slider" min="0" max="20" step="0.1" value="9.8">
+        <span class="val" id="gravity-val">9.8</span>
+      </div>
+    </div>
+    <!-- <div id="camera-mode">相机: <span id="cam-mode-text">手动旋转</span></div> -->
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

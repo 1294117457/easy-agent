@@ -26,6 +26,10 @@ export class Cloth {
   // === 初始位置记录（用于重置） ===
   private initPositions: Array<[number, number, number]> = [];
 
+  getIntegrator(): VerletIntegrator {
+    return this.integrator;
+  }
+
   constructor(
     scene: THREE.Scene,
     width = 2.5,
@@ -41,8 +45,8 @@ export class Cloth {
 
     this.integrator = new VerletIntegrator(
       new THREE.Vector3(0, -9.8, 0),
-      0.98,   // damping
-      10,     // constraint iterations
+      0.98,
+      10,
     );
 
     this._createParticles(position);
@@ -85,7 +89,8 @@ export class Cloth {
   }
 
   private _createSprings(): void {
-    const stiffness = 0.9;
+    //刚度-------------------------------------=================================---------------
+    const stiffness = 0.05;
 
     for (let j = 0; j <= this.segY; j++) {
       for (let i = 0; i <= this.segX; i++) {
