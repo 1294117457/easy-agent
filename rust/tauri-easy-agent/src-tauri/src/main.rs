@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    tauri_easy_agent_lib::run()
+    tauri_easy_agent_lib::run()//tauri_easy_agent源自Cargo.toml设置的包名
 }
