@@ -1,45 +1,100 @@
 # ApiKey 六边形架构实现
 
-## 1. 目录结构
+## 1. 名词解释：InputPort vs OutputPort
+
+| 端口类型 | 含义 | 方向 | 调用者 |
+|---|---|---|---|
+| **InputPort**（ Driving Port） | 核心域暴露给外部的接口 | 外部 → 核心 | Tauri Commands / Agent / Graph |
+| **OutputPort**（Driven Port） | 核心域需要外部能力时的接口 | 核心 → 外部 | Application Service |
 
 ```
-step1/
-├── apikey/
-│   ├── mod.rs                    # 模块入口
-│   ├── entity.rs                 # 实体定义（已在 src-tauri 中存在）
-│   ├── port/
-│   │   ├── mod.rs
-│   │   ├── repository.rs         # 仓储端口（持久化）
-│   │   └── service.rs            # 应用服务端口（业务能力）
-│   ├── adapter/
-│   │   ├── mod.rs
-│   │   ├── persistence/
-│   │   │   ├── mod.rs
-│   │   │   └── sqlite.rs         # SQLite 持久化适配器
-│   │   └── crypto/
-│   │       ├── mod.rs
-│   │       └── aes.rs            # AES 加密适配器
-│   └── application/
+Tauri Commands / Agent / Graph
+        │
+        │  ← 调用 InputPort（外部驱动核心）
+        ▼
+  ┌─────────────────────────────────┐
+  │          Application            │
+  │   （编排 InputPort + OutputPort）│
+  └───────────┬─────────────────────┘
+              │
+    ┌─────────┴─────────┐
+    │                   │
+    ▼                   ▼
+InputPort           OutputPort
+（定义能力）         （定义依赖）
+    │                   │
+    │                   ▼
+    │          ┌────────────────┐
+    │          │    Adapter     │
+    │          │（实现 OutputPort）│
+    │          └────────┬───────┘
+    │                   │
+    └──────┬────────────┘
+           ▼
+    ┌──────────────────┐
+    │  Domain / Entity │
+    └──────────────────┘
+```
+
+## 2. 目录结构
+
+```
+src-tauri/src/
+├── domain/
+│   └── apikey/
+│       ├── mod.rs              # 模块入口
+│       ├── ApikeyEntity.rs     # 实体
+│       ├── ApikeyInputPort.rs  # 输入端口（外部驱动核心的接口）
+│       └── ApikeyOutputPort.rs # 输出端口（核心依赖外部能力的接口）
+├── application/
+│   └── apikey/
 │       ├── mod.rs
-│       ├── apikey_service.rs     # 应用服务实现
-│       └── dto.rs                # 数据传输对象
+│       └── ApikeyApplication.rs  # 应用服务（实现 InputPort，调用 OutputPort）
+├── infra/
+│   ├── persistence/
+│   │   ├── mod.rs
+│   │   └── sqlite.rs            # SQLite 基础设施
+│   └── apikey/
+│       ├── mod.rs
+│       ├── ApikeyInputAdapter.rs   # 输入适配器（Tauri Commands 调用 InputPort）
+│       └── ApikeyOutputAdapter.rs  # 输出适配器（实现 OutputPort，供 Application 注入）
 ```
 
-## 2. Entity（实体）
+## 3. Domain（领域层）
 
-已在 `src-tauri/src/domain/apikey/entity.rs` 中实现，核心结构如下：
+### 3.1 Entity（ApikeyEntity.rs）
 
 ```rust
-// ==================== 包装类型 ====================
+// src-tauri/src/domain/apikey/ApikeyEntity.rs
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+// ==================== 值对象 ====================
 
 /// API Key 唯一标识符（值对象）
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ApiKeyId(pub String);
 
 impl ApiKeyId {
-    pub fn new() -> Self;
-    pub fn from_string(s: String) -> Self;
-    pub fn as_str(&self) -> &str;
+    pub fn new() -> Self {
+        Self(Uuid::new_v4().to_string())
+    }
+
+    pub fn from_string(s: String) -> Self {
+        Self(s)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Default for ApiKeyId {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// LLM 提供商枚举
@@ -54,6 +109,20 @@ pub enum LlmProvider {
     Xiaomi,
 }
 
+impl LlmProvider {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LlmProvider::OpenAi => "openai",
+            LlmProvider::Anthropic => "anthropic",
+            LlmProvider::Qwen => "qwen",
+            LlmProvider::Groq => "groq",
+            LlmProvider::DeepSeek => "deepseek",
+            LlmProvider::Gemini => "gemini",
+            LlmProvider::Xiaomi => "xiaomi",
+        }
+    }
+}
+
 /// API Key 状态枚举
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum KeyStatus {
@@ -62,12 +131,18 @@ pub enum KeyStatus {
     Expired,
 }
 
+// ==================== 实体 ====================
+
 /// API Key 实体
+///
+/// 代表一个 LLM API Key，包含加密存储的密钥和元信息。
+/// 包含加密后的 key，永不在输出中暴露明文。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKey {
     pub id: ApiKeyId,
     pub name: String,
-    pub encrypted_key: String,          // 加密后的 Key
+    /// 加密后的 Key（存储时不暴露明文）
+    pub encrypted_key: String,
     pub provider: LlmProvider,
     pub model: String,
     pub base_url: Option<String>,
@@ -78,59 +153,207 @@ pub struct ApiKey {
 }
 
 impl ApiKey {
-    pub fn new(name, encrypted_key, provider, model) -> Self;
-    pub fn reconstitute(...) -> Self;    // 从持久化数据重建
-    pub fn is_active(&self) -> bool;
-    pub fn activate(&mut self);
-    pub fn deactivate(&mut self);
-    pub fn mark_expired(&mut self);
-    pub fn record_usage(&mut self);
-    pub fn set_base_url(&mut self, url: Option<String>);
-    pub fn update_model(&mut self, model: String);
-    pub fn update_key(&mut self, encrypted_key: String);
+    // ============ 构造函数 ============
+
+    pub fn new(
+        name: String,
+        encrypted_key: String,
+        provider: LlmProvider,
+        model: String,
+    ) -> Self {
+        let now = Utc::now();
+        Self {
+            id: ApiKeyId::new(),
+            name,
+            encrypted_key,
+            provider,
+            model,
+            base_url: None,
+            status: KeyStatus::Active,
+            created_at: now,
+            updated_at: now,
+            last_used_at: None,
+        }
+    }
+
+    /// 从持久化数据重建（用于从数据库加载）
+    pub fn reconstitute(
+        id: ApiKeyId,
+        name: String,
+        encrypted_key: String,
+        provider: LlmProvider,
+        model: String,
+        base_url: Option<String>,
+        status: KeyStatus,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+        last_used_at: Option<DateTime<Utc>>,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            encrypted_key,
+            provider,
+            model,
+            base_url,
+            status,
+            created_at,
+            updated_at,
+            last_used_at,
+        }
+    }
+
+    // ============ 业务方法 ============
+
+    pub fn is_active(&self) -> bool {
+        self.status == KeyStatus::Active
+    }
+
+    pub fn activate(&mut self) {
+        self.status = KeyStatus::Active;
+        self.updated_at = Utc::now();
+    }
+
+    pub fn deactivate(&mut self) {
+        self.status = KeyStatus::Inactive;
+        self.updated_at = Utc::now();
+    }
+
+    pub fn mark_expired(&mut self) {
+        self.status = KeyStatus::Expired;
+        self.updated_at = Utc::now();
+    }
+
+    pub fn record_usage(&mut self) {
+        self.last_used_at = Some(Utc::now());
+        self.updated_at = Utc::now();
+    }
+
+    pub fn set_base_url(&mut self, url: Option<String>) {
+        self.base_url = url;
+        self.updated_at = Utc::now();
+    }
+
+    pub fn update_model(&mut self, model: String) {
+        self.model = model;
+        self.updated_at = Utc::now();
+    }
+
+    pub fn update_key(&mut self, encrypted_key: String) {
+        self.encrypted_key = encrypted_key;
+        self.updated_at = Utc::now();
+    }
 }
 ```
 
-## 3. Port（端口）
+### 3.2 InputPort（ApikeyInputPort.rs）
 
-### 3.1 仓储端口（repository.rs）
+InputPort 是**核心域暴露给外部调用的接口**，由 Application 层实现。
 
 ```rust
-// src-tauri/src/domain/apikey/port/repository.rs
+// src-tauri/src/domain/apikey/ApikeyInputPort.rs
 
-use crate::domain::apikey::entity::{ApiKey, ApiKeyId, KeyStatus, LlmProvider};
+use crate::domain::apikey::ApikeyEntity::{ApiKey, ApiKeyId, KeyStatus, LlmProvider};
+use crate::domain::apikey::application::ApikeyApplication;
 
-/// ApiKey 仓储端口（属于 driving port）
+/// ApiKey 输入端口（Driving Port / InputPort）
 ///
-/// 定义对 ApiKey 聚合根的持久化操作契约。
-/// 具体实现由 adapter 层注入，六边形内核心业务依赖此接口。
-pub trait ApiKeyRepository: Send + Sync {
-    /// 根据 ID 查询
-    fn find_by_id(&self, id: &ApiKeyId) -> impl Future<Output = Result<Option<ApiKey>, RepoError>> + Send;
+/// 定义外部（Command / Agent / Graph）可以调用核心域能力的接口契约。
+/// 由 Application 层（ApikeyApplication）实现。
+pub trait ApikeyInputPort: Send + Sync {
+    /// 创建 API Key
+    async fn create(
+        &self,
+        name: String,
+        api_key: String,
+        provider: LlmProvider,
+        model: String,
+        base_url: Option<String>,
+    ) -> Result<ApiKey, ApikeyInputError>;
 
-    /// 查询所有
-    fn find_all(&self) -> impl Future<Output = Result<Vec<ApiKey>, RepoError>> + Send;
+    /// 根据 ID 获取
+    async fn get_by_id(&self, id: &str) -> Result<Option<ApiKey>, ApikeyInputError>;
 
-    /// 根据 Provider 查询
-    fn find_by_provider(&self, provider: LlmProvider) -> impl Future<Output = Result<Vec<ApiKey>, RepoError>> + Send;
+    /// 获取所有
+    async fn list_all(&self) -> Result<Vec<ApiKey>, ApikeyInputError>;
 
-    /// 根据状态查询
-    fn find_by_status(&self, status: KeyStatus) -> impl Future<Output = Result<Vec<ApiKey>, RepoError>> + Send;
+    /// 获取默认 Key
+    async fn get_default(&self) -> Result<Option<ApiKey>, ApikeyInputError>;
 
-    /// 保存（新建或更新）
-    fn save(&self, apikey: &ApiKey) -> impl Future<Output = Result<(), RepoError>> + Send;
+    /// 更新 API Key
+    async fn update(
+        &self,
+        id: &str,
+        name: Option<String>,
+        api_key: Option<String>,
+        model: Option<String>,
+        base_url: Option<String>,
+        status: Option<KeyStatus>,
+    ) -> Result<ApiKey, ApikeyInputError>;
 
-    /// 删除
-    fn delete(&self, id: &ApiKeyId) -> impl Future<Output = Result<(), RepoError>> + Send;
+    /// 删除 API Key
+    async fn delete(&self, id: &str) -> Result<(), ApikeyInputError>;
 
-    /// 获取默认 Key（is_default=true 且 Active）
-    fn find_default(&self) -> impl Future<Output = Result<Option<ApiKey>, RepoError>> + Send;
+    /// 验证 API Key 有效性
+    async fn verify(&self, id: &str) -> Result<bool, ApikeyInputError>;
+
+    /// 记录使用时间
+    async fn record_usage(&self, id: &str) -> Result<(), ApikeyInputError>;
 }
 
-/// 仓储层错误类型
+/// 输入端口错误类型
 #[derive(Debug, thiserror::Error)]
-pub enum RepoError {
-    #[error("Record not found: {0}")]
+pub enum ApikeyInputError {
+    #[error("Crypto error: {0}")]
+    CryptoError(String),
+
+    #[error("Repository error: {0}")]
+    RepoError(String),
+
+    #[error("Not found: {0}")]
+    NotFound(String),
+
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+
+    #[error("Verification failed: {0}")]
+    VerifyFailed(String),
+}
+```
+
+### 3.3 OutputPort（ApikeyOutputPort.rs）
+
+OutputPort 是**核心域需要外部能力时的接口契约**，由 Adapter 层实现并注入。
+
+```rust
+// src-tauri/src/domain/apikey/ApikeyOutputPort.rs
+
+use crate::domain::apikey::ApikeyEntity::{ApiKey, ApiKeyId, KeyStatus, LlmProvider};
+
+/// ApiKey 仓储输出端口（Driven Port / OutputPort）
+///
+/// 定义持久化能力的接口契约。
+/// 由 Adapter 层（SqliteApikeyOutputAdapter）实现并注入到 Application。
+pub trait ApikeyRepositoryOutputPort: Send + Sync {
+    fn find_by_id(&self, id: &ApiKeyId) -> impl Future<Output = Result<Option<ApiKey>, ApikeyRepoError>> + Send;
+
+    fn find_all(&self) -> impl Future<Output = Result<Vec<ApiKey>, ApikeyRepoError>> + Send;
+
+    fn find_by_provider(&self, provider: LlmProvider) -> impl Future<Output = Result<Vec<ApiKey>, ApikeyRepoError>> + Send;
+
+    fn find_by_status(&self, status: KeyStatus) -> impl Future<Output = Result<Vec<ApiKey>, ApikeyRepoError>> + Send;
+
+    fn save(&self, apikey: &ApiKey) -> impl Future<Output = Result<(), ApikeyRepoError>> + Send;
+
+    fn delete(&self, id: &ApiKeyId) -> impl Future<Output = Result<(), ApikeyRepoError>> + Send;
+
+    fn find_default(&self) -> impl Future<Output = Result<Option<ApiKey>, ApikeyRepoError>> + Send;
+}
+
+/// 仓储层错误
+#[derive(Debug, thiserror::Error)]
+pub enum ApikeyRepoError {
+    #[error("Not found: {0}")]
     NotFound(String),
 
     #[error("Database error: {0}")]
@@ -139,27 +362,19 @@ pub enum RepoError {
     #[error("Serialization error: {0}")]
     SerializationError(String),
 }
-```
 
-### 3.2 服务端口（service.rs）
-
-```rust
-// src-tauri/src/domain/apikey/port/service.rs
-
-use crate::domain::apikey::entity::{ApiKey, ApiKeyId, KeyStatus, LlmProvider};
-
-/// ApiKey 加密服务端口（属于 driving port）
+/// 加密服务输出端口（Driven Port / OutputPort）
 ///
-/// 定义密钥加密/解密的契约。
-/// 具体实现由 adapter 层的 crypto 模块注入。
-pub trait CryptoService: Send + Sync {
-    /// 加密 API Key
+/// 定义加密/解密能力的接口契约。
+/// 由 Adapter 层（AesCryptoOutputAdapter）实现并注入到 Application。
+pub trait CryptoServiceOutputPort: Send + Sync {
+    /// 加密明文 Key
     fn encrypt(&self, plaintext: &str) -> Result<String, CryptoError>;
 
-    /// 解密 API Key
+    /// 解密密文 Key
     fn decrypt(&self, ciphertext: &str) -> Result<String, CryptoError>;
 
-    /// 验证 API Key 有效性（通过调用 provider 的 /models 接口）
+    /// 验证 API Key 有效性（通过调用 Provider 的 /models 接口）
     fn verify(&self, apikey: &ApiKey) -> impl Future<Output = Result<bool, VerifyError>> + Send;
 }
 
@@ -190,31 +405,230 @@ pub enum VerifyError {
 }
 ```
 
-## 4. Adapter（适配器）
-
-### 4.1 持久化适配器（sqlite.rs）
+### 3.4 mod.rs（domain/apikey）
 
 ```rust
-// src-tauri/src/domain/apikey/adapter/persistence/sqlite.rs
+// src-tauri/src/domain/apikey/mod.rs
+
+pub mod ApikeyEntity;
+pub mod ApikeyInputPort;
+pub mod ApikeyOutputPort;
+
+pub use ApikeyEntity::{ApiKey, ApiKeyId, KeyStatus, LlmProvider};
+pub use ApikeyInputPort::{ApikeyInputPort, ApikeyInputError};
+pub use ApikeyOutputPort::{
+    ApikeyRepositoryOutputPort, ApikeyRepoError,
+    CryptoServiceOutputPort, CryptoError, VerifyError,
+};
+```
+
+## 4. Application（应用层）
+
+### 4.1 Application（ApikeyApplication.rs）
+
+```rust
+// src-tauri/src/application/apikey/ApikeyApplication.rs
+
+use std::sync::Arc;
+use thiserror::Error;
+
+use crate::domain::apikey::{
+    ApiKey, ApiKeyId, KeyStatus, LlmProvider,
+    ApikeyInputPort, ApikeyInputError,
+    ApikeyRepositoryOutputPort, ApikeyRepoError,
+    CryptoServiceOutputPort, CryptoError, VerifyError,
+};
+
+/// ApiKey 应用服务
+///
+/// 实现 ApikeyInputPort，编排 ApikeyRepositoryOutputPort 和 CryptoServiceOutputPort。
+/// 由 Tauri Commands（InputAdapter）调用。
+pub struct ApikeyApplication {
+    repository: Arc<dyn ApikeyRepositoryOutputPort>,
+    crypto: Arc<dyn CryptoServiceOutputPort>,
+}
+
+impl ApikeyApplication {
+    pub fn new(
+        repository: Arc<dyn ApikeyRepositoryOutputPort>,
+        crypto: Arc<dyn CryptoServiceOutputPort>,
+    ) -> Self {
+        Self { repository, crypto }
+    }
+
+    fn map_repo_error(e: ApikeyRepoError) -> ApikeyInputError {
+        ApikeyInputError::RepoError(e.to_string())
+    }
+}
+
+impl ApikeyInputPort for ApikeyApplication {
+    async fn create(
+        &self,
+        name: String,
+        api_key: String,
+        provider: LlmProvider,
+        model: String,
+        base_url: Option<String>,
+    ) -> Result<ApiKey, ApikeyInputError> {
+        let encrypted_key = self.crypto
+            .encrypt(&api_key)
+            .map_err(|e| ApikeyInputError::CryptoError(e.to_string()))?;
+
+        let mut apikey = ApiKey::new(name, encrypted_key, provider, model);
+        apikey.set_base_url(base_url);
+
+        self.repository.save(&apikey)
+            .await
+            .map_err(Self::map_repo_error)?;
+
+        Ok(apikey)
+    }
+
+    async fn get_by_id(&self, id: &str) -> Result<Option<ApiKey>, ApikeyInputError> {
+        self.repository
+            .find_by_id(&ApiKeyId::from_string(id.to_string()))
+            .await
+            .map_err(Self::map_repo_error)
+    }
+
+    async fn list_all(&self) -> Result<Vec<ApiKey>, ApikeyInputError> {
+        self.repository.find_all()
+            .await
+            .map_err(Self::map_repo_error)
+    }
+
+    async fn get_default(&self) -> Result<Option<ApiKey>, ApikeyInputError> {
+        self.repository.find_default()
+            .await
+            .map_err(Self::map_repo_error)
+    }
+
+    async fn update(
+        &self,
+        id: &str,
+        name: Option<String>,
+        api_key: Option<String>,
+        model: Option<String>,
+        base_url: Option<String>,
+        status: Option<KeyStatus>,
+    ) -> Result<ApiKey, ApikeyInputError> {
+        let mut apikey = self.repository
+            .find_by_id(&ApiKeyId::from_string(id.to_string()))
+            .await
+            .map_err(Self::map_repo_error)?
+            .ok_or_else(|| ApikeyInputError::NotFound(id.to_string()))?;
+
+        if let Some(n) = name {
+            apikey.name = n;
+            apikey.updated_at = chrono::Utc::now();
+        }
+
+        if let Some(m) = model {
+            apikey.update_model(m);
+        }
+
+        if let Some(url) = base_url {
+            apikey.set_base_url(Some(url));
+        }
+
+        if let Some(s) = status {
+            match s {
+                KeyStatus::Active => apikey.activate(),
+                KeyStatus::Inactive => apikey.deactivate(),
+                KeyStatus::Expired => apikey.mark_expired(),
+            }
+        }
+
+        if let Some(k) = api_key {
+            let encrypted = self.crypto
+                .encrypt(&k)
+                .map_err(|e| ApikeyInputError::CryptoError(e.to_string()))?;
+            apikey.update_key(encrypted);
+        }
+
+        self.repository.save(&apikey)
+            .await
+            .map_err(Self::map_repo_error)?;
+
+        Ok(apikey)
+    }
+
+    async fn delete(&self, id: &str) -> Result<(), ApikeyInputError> {
+        self.repository
+            .delete(&ApiKeyId::from_string(id.to_string()))
+            .await
+            .map_err(Self::map_repo_error)
+    }
+
+    async fn verify(&self, id: &str) -> Result<bool, ApikeyInputError> {
+        let apikey = self.repository
+            .find_by_id(&ApiKeyId::from_string(id.to_string()))
+            .await
+            .map_err(Self::map_repo_error)?
+            .ok_or_else(|| ApikeyInputError::NotFound(id.to_string()))?;
+
+        self.crypto.verify(&apikey)
+            .await
+            .map_err(|e| ApikeyInputError::VerifyFailed(e.to_string()))
+    }
+
+    async fn record_usage(&self, id: &str) -> Result<(), ApikeyInputError> {
+        let mut apikey = self.repository
+            .find_by_id(&ApiKeyId::from_string(id.to_string()))
+            .await
+            .map_err(Self::map_repo_error)?
+            .ok_or_else(|| ApikeyInputError::NotFound(id.to_string()))?;
+
+        apikey.record_usage();
+        self.repository.save(&apikey)
+            .await
+            .map_err(Self::map_repo_error)
+    }
+}
+```
+
+### 4.2 mod.rs（application/apikey）
+
+```rust
+// src-tauri/src/application/apikey/mod.rs
+
+pub mod ApikeyApplication;
+
+pub use ApikeyApplication::ApikeyApplication;
+```
+
+## 5. Infra（基础设施层）
+
+### 5.1 OutputAdapter（ApikeyOutputAdapter.rs）
+
+实现 `ApikeyRepositoryOutputPort`（持久化）和 `CryptoServiceOutputPort`（加密）。
+
+```rust
+// src-tauri/src/infra/apikey/ApikeyOutputAdapter.rs
 
 use async_trait::async_trait;
 use rusqlite::{params, Connection};
+use std::sync::Arc;
 
-use crate::domain::apikey::entity::{ApiKey, ApiKeyId, KeyStatus, LlmProvider};
-use crate::domain::apikey::port::repository::{ApiKeyRepository, RepoError};
+use crate::domain::apikey::{
+    ApiKey, ApiKeyId, KeyStatus, LlmProvider,
+    ApikeyRepositoryOutputPort, ApikeyRepoError,
+    CryptoServiceOutputPort, CryptoError, VerifyError,
+};
 
-/// SQLite 实现的 ApiKey 仓储适配器
-pub struct SqliteApiKeyRepository {
-    conn: Connection,
+// ==================== Repository Output Adapter ====================
+
+/// SQLite 实现的 ApiKey 仓储适配器（OutputAdapter）
+pub struct SqliteApikeyRepositoryOutputAdapter {
+    conn: Arc<Connection>,
 }
 
-impl SqliteApiKeyRepository {
-    pub fn new(conn: Connection) -> Self {
+impl SqliteApikeyRepositoryOutputAdapter {
+    pub fn new(conn: Arc<Connection>) -> Self {
         Self { conn }
     }
 
-    /// 建表 SQL
-    pub fn init_table(&self) -> Result<(), RepoError> {
+    pub fn init_table(&self) -> Result<(), ApikeyRepoError> {
         self.conn.execute(
             r#"
             CREATE TABLE IF NOT EXISTS api_keys (
@@ -231,8 +645,7 @@ impl SqliteApiKeyRepository {
             )
             "#,
             [],
-        )
-        .map_err(|e| RepoError::DatabaseError(e.to_string()))?;
+        ).map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?;
         Ok(())
     }
 
@@ -241,238 +654,249 @@ impl SqliteApiKeyRepository {
             id: ApiKeyId(row.column::<String>(0)?),
             name: row.column::<String>(1)?,
             encrypted_key: row.column::<String>(2)?,
-            provider: serde_json::from_str(&row.column::<String>(3)?).unwrap_or(LlmProvider::OpenAi),
+            provider: serde_json::from_str(&row.column::<String>(3)?)
+                .unwrap_or(LlmProvider::OpenAi),
             model: row.column::<String>(4)?,
             base_url: row.column::<Option<String>>(5)?,
-            status: serde_json::from_str(&row.column::<String>(6)?).unwrap_or(KeyStatus::Inactive),
-            created_at: row.column::<String>(7)?,
-            updated_at: row.column::<String>(8)?,
+            status: serde_json::from_str(&row.column::<String>(6)?)
+                .unwrap_or(KeyStatus::Inactive),
+            created_at: row.column::<String>(7)?.parse().unwrap_or_default(),
+            updated_at: row.column::<String>(8)?.parse().unwrap_or_default(),
             last_used_at: row.column::<Option<String>>(9)?,
         })
     }
 }
 
 #[async_trait]
-impl ApiKeyRepository for SqliteApiKeyRepository {
-    async fn find_by_id(&self, id: &ApiKeyId) -> Result<Option<ApiKey>, RepoError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id,name,encrypted_key,provider,model,base_url,status,created_at,updated_at,last_used_at FROM api_keys WHERE id = ?"
-        ).map_err(|e| RepoError::DatabaseError(e.to_string()))?;
+impl ApikeyRepositoryOutputPort for SqliteApikeyRepositoryOutputAdapter {
+    async fn find_by_id(&self, id: &ApiKeyId) -> Result<Option<ApiKey>, ApikeyRepoError> {
+        let conn = self.conn.clone();
+        let id_str = id.as_str().to_string();
 
-        let result = stmt
-            .query_row([id.as_str()], Self::map_row)
-            .optional()
-            .map_err(|e| RepoError::DatabaseError(e.to_string()))?;
+        tokio::task::spawn_blocking(move || {
+            let mut stmt = conn.prepare(
+                "SELECT id,name,encrypted_key,provider,model,base_url,status,created_at,updated_at,last_used_at
+                 FROM api_keys WHERE id = ?"
+            ).map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?;
 
-        Ok(result)
+            stmt.query_row([&id_str], Self::map_row)
+                .optional()
+                .map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))
+        }).await.map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?
     }
 
-    async fn find_all(&self) -> Result<Vec<ApiKey>, RepoError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id,name,encrypted_key,provider,model,base_url,status,created_at,updated_at,last_used_at FROM api_keys ORDER BY created_at DESC"
-        ).map_err(|e| RepoError::DatabaseError(e.to_string()))?;
+    async fn find_all(&self) -> Result<Vec<ApiKey>, ApikeyRepoError> {
+        let conn = self.conn.clone();
 
-        let rows = stmt
-            .query_map([], Self::map_row)
-            .map_err(|e| RepoError::DatabaseError(e.to_string()))?;
+        tokio::task::spawn_blocking(move || {
+            let mut stmt = conn.prepare(
+                "SELECT id,name,encrypted_key,provider,model,base_url,status,created_at,updated_at,last_used_at
+                 FROM api_keys ORDER BY created_at DESC"
+            ).map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?;
 
-        let mut apikeys = Vec::new();
-        for row in rows {
-            apikeys.push(row.map_err(|e| RepoError::DatabaseError(e.to_string()))?);
-        }
-        Ok(apikeys)
+            let rows = stmt.query_map([], Self::map_row)
+                .map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?;
+
+            let mut keys = Vec::new();
+            for row in rows {
+                keys.push(row.map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?);
+            }
+            Ok(keys)
+        }).await.map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?
     }
 
-    async fn find_by_provider(&self, provider: LlmProvider) -> Result<Vec<ApiKey>, RepoError> {
+    async fn find_by_provider(&self, provider: LlmProvider) -> Result<Vec<ApiKey>, ApikeyRepoError> {
+        let conn = self.conn.clone();
         let provider_str = serde_json::to_string(&provider).unwrap();
-        let mut stmt = self.conn.prepare(
-            "SELECT ... FROM api_keys WHERE provider = ?"
-        ).map_err(|e| RepoError::DatabaseError(e.to_string()))?;
 
-        let rows = stmt
-            .query_map([provider_str.as_str()], Self::map_row)
-            .map_err(|e| RepoError::DatabaseError(e.to_string()))?;
+        tokio::task::spawn_blocking(move || {
+            let mut stmt = conn.prepare(
+                "SELECT id,name,encrypted_key,provider,model,base_url,status,created_at,updated_at,last_used_at
+                 FROM api_keys WHERE provider = ?"
+            ).map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?;
 
-        let mut apikeys = Vec::new();
-        for row in rows {
-            apikeys.push(row.map_err(|e| RepoError::DatabaseError(e.to_string()))?);
-        }
-        Ok(apikeys)
+            let rows = stmt.query_map([&provider_str], Self::map_row)
+                .map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?;
+
+            let mut keys = Vec::new();
+            for row in rows {
+                keys.push(row.map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?);
+            }
+            Ok(keys)
+        }).await.map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?
     }
 
-    async fn find_by_status(&self, status: KeyStatus) -> Result<Vec<ApiKey>, RepoError> {
+    async fn find_by_status(&self, status: KeyStatus) -> Result<Vec<ApiKey>, ApikeyRepoError> {
+        let conn = self.conn.clone();
         let status_str = serde_json::to_string(&status).unwrap();
-        // ... 类似实现
-        todo!()
+
+        tokio::task::spawn_blocking(move || {
+            let mut stmt = conn.prepare(
+                "SELECT ... FROM api_keys WHERE status = ?"
+            ).map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?;
+
+            let rows = stmt.query_map([&status_str], Self::map_row)
+                .map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?;
+
+            let mut keys = Vec::new();
+            for row in rows {
+                keys.push(row.map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?);
+            }
+            Ok(keys)
+        }).await.map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?
     }
 
-    async fn save(&self, apikey: &ApiKey) -> Result<(), RepoError> {
+    async fn save(&self, apikey: &ApiKey) -> Result<(), ApikeyRepoError> {
+        let conn = self.conn.clone();
         let provider_str = serde_json::to_string(&apikey.provider).unwrap();
         let status_str = serde_json::to_string(&apikey.status).unwrap();
+        let apikey_clone = apikey.clone();
 
-        self.conn.execute(
-            r#"
-            INSERT INTO api_keys (id,name,encrypted_key,provider,model,base_url,status,created_at,updated_at,last_used_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(id) DO UPDATE SET
-                name=excluded.name,
-                encrypted_key=excluded.encrypted_key,
-                provider=excluded.provider,
-                model=excluded.model,
-                base_url=excluded.base_url,
-                status=excluded.status,
-                updated_at=excluded.updated_at,
-                last_used_at=excluded.last_used_at
-            "#,
-            params![
-                apikey.id.as_str(),
-                apikey.name,
-                apikey.encrypted_key,
-                provider_str,
-                apikey.model,
-                apikey.base_url,
-                status_str,
-                apikey.created_at.to_rfc3339(),
-                apikey.updated_at.to_rfc3339(),
-                apikey.last_used_at.map(|dt| dt.to_rfc3339()),
-            ],
-        ).map_err(|e| RepoError::DatabaseError(e.to_string()))?;
-
-        Ok(())
+        tokio::task::spawn_blocking(move || {
+            conn.execute(
+                r#"
+                INSERT INTO api_keys (id,name,encrypted_key,provider,model,base_url,status,created_at,updated_at,last_used_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name=excluded.name, encrypted_key=excluded.encrypted_key,
+                    provider=excluded.provider, model=excluded.model,
+                    base_url=excluded.base_url, status=excluded.status,
+                    updated_at=excluded.updated_at, last_used_at=excluded.last_used_at
+                "#,
+                params![
+                    apikey_clone.id.as_str(),
+                    apikey_clone.name,
+                    apikey_clone.encrypted_key,
+                    provider_str,
+                    apikey_clone.model,
+                    apikey_clone.base_url,
+                    status_str,
+                    apikey_clone.created_at.to_rfc3339(),
+                    apikey_clone.updated_at.to_rfc3339(),
+                    apikey_clone.last_used_at.map(|dt| dt.to_rfc3339()),
+                ],
+            ).map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?;
+            Ok(())
+        }).await.map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?
     }
 
-    async fn delete(&self, id: &ApiKeyId) -> Result<(), RepoError> {
-        self.conn.execute(
-            "DELETE FROM api_keys WHERE id = ?",
-            [id.as_str()],
-        ).map_err(|e| RepoError::DatabaseError(e.to_string()))?;
-        Ok(())
+    async fn delete(&self, id: &ApiKeyId) -> Result<(), ApikeyRepoError> {
+        let conn = self.conn.clone();
+        let id_str = id.as_str().to_string();
+
+        tokio::task::spawn_blocking(move || {
+            conn.execute("DELETE FROM api_keys WHERE id = ?", [&id_str])
+                .map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?;
+            Ok(())
+        }).await.map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?
     }
 
-    async fn find_default(&self) -> Result<Option<ApiKey>, RepoError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT ... FROM api_keys WHERE status = 'active' LIMIT 1"
-        ).map_err(|e| RepoError::DatabaseError(e.to_string()))?;
+    async fn find_default(&self) -> Result<Option<ApiKey>, ApikeyRepoError> {
+        let conn = self.conn.clone();
 
-        let result = stmt
-            .query_row([], Self::map_row)
-            .optional()
-            .map_err(|e| RepoError::DatabaseError(e.to_string()))?;
+        tokio::task::spawn_blocking(move || {
+            let mut stmt = conn.prepare(
+                "SELECT id,name,encrypted_key,provider,model,base_url,status,created_at,updated_at,last_used_at
+                 FROM api_keys WHERE status = 'active' LIMIT 1"
+            ).map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?;
 
-        Ok(result)
+            stmt.query_row([], Self::map_row)
+                .optional()
+                .map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))
+        }).await.map_err(|e| ApikeyRepoError::DatabaseError(e.to_string()))?
     }
 }
-```
 
-### 4.2 加密适配器（aes.rs）
+// ==================== Crypto Service Output Adapter ====================
 
-```rust
-// src-tauri/src/domain/apikey/adapter/crypto/aes.rs
-
-use aes::Aes256;
-use cbc::{Encryptor, Decryptor, cipher::{BlockEncryptMut, BlockDecryptMut, KeyIvInit}};
-use rand::Rng;
-
-use crate::domain::apikey::port::service::{CryptoService, CryptoError};
-
-type Aes256CbcEnc = Encryptor<Aes256>;
-type Aes256CbcDec = Decryptor<Aes256>;
-
-const KEY_SIZE: usize = 32; // AES-256
-const IV_SIZE: usize = 16;  // CBC mode
-
-/// AES-256-CBC 加密服务实现
-pub struct AesCryptoAdapter {
-    key: [u8; KEY_SIZE],
+/// AES-256-CBC 加密服务适配器（OutputAdapter）
+pub struct AesCryptoOutputAdapter {
+    key: [u8; 32],
 }
 
-impl AesCryptoAdapter {
-    /// 从环境变量或配置文件加载密钥
+impl AesCryptoOutputAdapter {
     pub fn from_env() -> Result<Self, CryptoError> {
         let key_str = std::env::var("API_KEY_ENCRYPTION_KEY")
-            .map_err(|_| CryptoError::EncryptionFailed("Missing API_KEY_ENCRYPTION_KEY".into()))?;
+            .map_err(|_| CryptoError::InvalidKeyLength)?;
 
         let key_bytes = base64::decode(&key_str)
             .map_err(|_| CryptoError::InvalidKeyLength)?;
 
-        if key_bytes.len() != KEY_SIZE {
+        if key_bytes.len() != 32 {
             return Err(CryptoError::InvalidKeyLength);
         }
 
-        let mut key = [0u8; KEY_SIZE];
+        let mut key = [0u8; 32];
         key.copy_from_slice(&key_bytes);
         Ok(Self { key })
     }
-
-    /// 使用固定密钥（仅开发环境）
-    #[cfg(test)]
-    pub fn with_test_key() -> Self {
-        let key = [0u8; KEY_SIZE];
-        Self { key }
-    }
 }
 
-impl CryptoService for AesCryptoAdapter {
+impl CryptoServiceOutputPort for AesCryptoOutputAdapter {
     fn encrypt(&self, plaintext: &str) -> Result<String, CryptoError> {
+        use aes::Aes256;
+        use cbc::{Encryptor, cipher::{BlockEncryptMut, KeyIvInit}};
+        use rand::Rng;
+
         let mut rng = rand::thread_rng();
-        let mut iv = [0u8; IV_SIZE];
+        let mut iv = [0u8; 16];
         rng.fill(&mut iv);
 
-        let cipher = Aes256CbcEnc::new(&self.key.into(), &iv.into());
+        let cipher = Encryptor::<Aes256>::new(&self.key.into(), &iv.into());
         let mut buf = vec![0u8; (plaintext.len() + 15) & !15];
         buf[..plaintext.len()].copy_from_slice(plaintext.as_bytes());
 
-        cipher
-            .encrypt_padded_blocks_mut::<aes::cipher::block_padding::Pkcs7>(&mut buf)
+        cipher.encrypt_padded_blocks_mut::<aes::cipher::block_padding::Pkcs7>(&mut buf)
             .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
 
-        // 拼接 IV + 密文，再做 base64
         let mut combined = iv.to_vec();
         combined.extend(buf);
         Ok(base64::encode(&combined))
     }
 
     fn decrypt(&self, ciphertext: &str) -> Result<String, CryptoError> {
+        use aes::Aes256;
+        use cbc::{Decryptor, cipher::{BlockDecryptMut, KeyIvInit}};
+
         let combined = base64::decode(ciphertext)
             .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
 
-        if combined.len() < IV_SIZE {
+        if combined.len() < 16 {
             return Err(CryptoError::DecryptionFailed("Data too short".into()));
         }
 
-        let (iv, encrypted) = combined.split_at(IV_SIZE);
-        let mut iv_arr = [0u8; IV_SIZE];
+        let (iv, encrypted) = combined.split_at(16);
+        let mut iv_arr = [0u8; 16];
         iv_arr.copy_from_slice(iv);
 
         let mut buf = encrypted.to_vec();
-        let cipher = Aes256CbcDec::new(&self.key.into(), &iv_arr.into());
+        let cipher = Decryptor::<Aes256>::new(&self.key.into(), &iv_arr.into());
 
-        cipher
-            .decrypt_padded_blocks_mut::<aes::cipher::block_padding::Pkcs7>(&mut buf)
+        cipher.decrypt_padded_blocks_mut::<aes::cipher::block_padding::Pkcs7>(&mut buf)
             .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
 
-        String::from_utf8(buf).map_err(|e| CryptoError::DecryptionFailed(e.to_string()))
+        String::from_utf8(buf)
+            .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))
     }
 
     async fn verify(&self, apikey: &ApiKey) -> Result<bool, VerifyError> {
-        use reqwest;
+        use reqwest::Client;
         use std::time::Duration;
 
-        let client = reqwest::Client::builder()
+        let client = Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| VerifyError::NetworkError(e.to_string()))?;
 
+        let api_key = self.decrypt(&apikey.encrypted_key)
+            .map_err(|e| VerifyError::NetworkError(format!("decrypt failed: {}", e)))?;
+
         let base_url = apikey.base_url.as_deref()
-            .unwrap_or(match apikey.provider {
-                LlmProvider::OpenAi => "https://api.openai.com",
-                LlmProvider::Anthropic => "https://api.anthropic.com",
-                _ => "https://api.openai.com",
-            });
+            .unwrap_or("https://api.openai.com");
 
         let response = client
             .get(format!("{}/v1/models", base_url))
-            .header("Authorization", format!("Bearer {}", self.decrypt(&apikey.encrypted_key)?))
+            .header("Authorization", format!("Bearer {}", api_key))
             .send()
             .await
             .map_err(|e| VerifyError::NetworkError(e.to_string()))?;
@@ -486,39 +910,26 @@ impl CryptoService for AesCryptoAdapter {
 }
 ```
 
-## 5. Application（应用层）
+### 5.2 InputAdapter（ApikeyInputAdapter.rs）
 
-### 5.1 DTO（dto.rs）
+实现 Tauri Commands，作为 driving adapter 调用 InputPort。
 
 ```rust
-// src-tauri/src/domain/apikey/application/dto.rs
+// src-tauri/src/infra/apikey/ApikeyInputAdapter.rs
 
-use serde::{Deserialize, Serialize};
-use crate::domain::apikey::entity::{ApiKeyId, KeyStatus, LlmProvider};
+use tauri;
+use std::sync::Arc;
 
-/// 创建 API Key 的请求 DTO
-#[derive(Debug, Deserialize)]
-pub struct CreateApiKeyDto {
-    pub name: String,
-    pub api_key: String,         // 明文 Key（由前端传入）
-    pub provider: LlmProvider,
-    pub model: String,
-    pub base_url: Option<String>,
-}
+use crate::application::apikey::ApikeyApplication;
+use crate::domain::apikey::{
+    ApiKeyId, KeyStatus, LlmProvider,
+    ApikeyInputPort, ApikeyInputError,
+};
+use crate::domain::apikey::ApikeyEntity::ApiKey;
 
-/// 更新 API Key 的请求 DTO
-#[derive(Debug, Deserialize)]
-pub struct UpdateApiKeyDto {
-    pub name: Option<String>,
-    pub api_key: Option<String>, // 明文 Key
-    pub model: Option<String>,
-    pub base_url: Option<String>,
-    pub status: Option<KeyStatus>,
-}
-
-/// API Key 响应 DTO（对外不暴露加密后的 key）
-#[derive(Debug, Serialize)]
-pub struct ApiKeyResponseDto {
+/// DTO: API Key 响应（对外不暴露 encrypted_key）
+#[derive(serde::Serialize)]
+pub struct ApikeyResponseDto {
     pub id: String,
     pub name: String,
     pub provider: String,
@@ -531,7 +942,7 @@ pub struct ApiKeyResponseDto {
     pub last_used_at: Option<String>,
 }
 
-impl From<&ApiKey> for ApiKeyResponseDto {
+impl From<&ApiKey> for ApikeyResponseDto {
     fn from(apikey: &ApiKey) -> Self {
         Self {
             id: apikey.id.as_str().to_string(),
@@ -547,224 +958,225 @@ impl From<&ApiKey> for ApiKeyResponseDto {
         }
     }
 }
+
+/// 将 InputPort 错误映射为 Tauri 友好的字符串
+fn map_err(e: ApikeyInputError) -> String {
+    e.to_string()
+}
+
+/// 创建 API Key
+#[tauri::command]
+pub async fn apikey_create(
+    app: tauri::AppHandle,
+    name: String,
+    api_key: String,
+    provider: String,
+    model: String,
+    base_url: Option<String>,
+) -> Result<ApikeyResponseDto, String> {
+    let application = app.state::<Arc<dyn ApikeyInputPort>>();
+    let prov = serde_json::from_str::<LlmProvider>(&format!("\"{}\"", provider))
+        .map_err(|e| format!("Invalid provider: {}", e))?;
+
+    application
+        .create(name, api_key, prov, model, base_url)
+        .await
+        .map(ApikeyResponseDto::from)
+        .map_err(map_err)
+}
+
+/// 获取 API Key 列表
+#[tauri::command]
+pub async fn apikey_list(
+    app: tauri::AppHandle,
+) -> Result<Vec<ApikeyResponseDto>, String> {
+    let application = app.state::<Arc<dyn ApikeyInputPort>>();
+    application
+        .list_all()
+        .await
+        .map(|keys| keys.iter().map(ApikeyResponseDto::from).collect())
+        .map_err(map_err)
+}
+
+/// 获取单个 API Key
+#[tauri::command]
+pub async fn apikey_get(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<Option<ApikeyResponseDto>, String> {
+    let application = app.state::<Arc<dyn ApikeyInputPort>>();
+    application
+        .get_by_id(&id)
+        .await
+        .map(|opt| opt.map(ApikeyResponseDto::from))
+        .map_err(map_err)
+}
+
+/// 更新 API Key
+#[tauri::command]
+pub async fn apikey_update(
+    app: tauri::AppHandle,
+    id: String,
+    name: Option<String>,
+    api_key: Option<String>,
+    model: Option<String>,
+    base_url: Option<String>,
+    status: Option<String>,
+) -> Result<ApikeyResponseDto, String> {
+    let application = app.state::<Arc<dyn ApikeyInputPort>>();
+    let key_status = if let Some(s) = status {
+        Some(serde_json::from_str(&format!("\"{}\"", s))
+            .map_err(|e| format!("Invalid status: {}", e))?)
+    } else {
+        None
+    };
+
+    application
+        .update(&id, name, api_key, model, base_url, key_status)
+        .await
+        .map(ApikeyResponseDto::from)
+        .map_err(map_err)
+}
+
+/// 删除 API Key
+#[tauri::command]
+pub async fn apikey_delete(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<(), String> {
+    let application = app.state::<Arc<dyn ApikeyInputPort>>();
+    application.delete(&id).await.map_err(map_err)
+}
+
+/// 验证 API Key
+#[tauri::command]
+pub async fn apikey_verify(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<bool, String> {
+    let application = app.state::<Arc<dyn ApikeyInputPort>>();
+    application.verify(&id).await.map_err(map_err)
+}
 ```
 
-### 5.2 应用服务（apikey_service.rs）
+### 5.3 mod.rs（infra/apikey）
 
 ```rust
-// src-tauri/src/domain/apikey/application/apikey_service.rs
+// src-tauri/src/infra/apikey/mod.rs
+
+pub mod ApikeyInputAdapter;
+pub mod ApikeyOutputAdapter;
+
+pub use ApikeyInputAdapter::*;
+pub use ApikeyOutputAdapter::*;
+```
+
+## 6. 组件装配（lib.rs）
+
+```rust
+// src-tauri/src/lib.rs
+
+mod domain;
+mod application;
+mod infra;
 
 use std::sync::Arc;
-use thiserror::Error;
+use rusqlite::Connection;
+use tauri::Manager;
 
-use crate::domain::apikey::entity::{ApiKey, ApiKeyId, LlmProvider};
-use crate::domain::apikey::port::repository::{ApiKeyRepository, RepoError};
-use crate::domain::apikey::port::service::CryptoService;
-use crate::domain::apikey::application::dto::{
-    CreateApiKeyDto, UpdateApiKeyDto, ApiKeyResponseDto,
+use application::apikey::ApikeyApplication;
+use domain::apikey::{
+    ApikeyInputPort,
+    ApikeyRepositoryOutputPort,
+    CryptoServiceOutputPort,
+};
+use infra::apikey::{
+    SqliteApikeyRepositoryOutputAdapter,
+    AesCryptoOutputAdapter,
+    apikey_create, apikey_list, apikey_get, apikey_update, apikey_delete, apikey_verify,
 };
 
-/// ApiKey 应用服务
-///
-/// 协调 Repository 和 CryptoService，处理业务逻辑。
-/// 由 Tauri 命令（driving adapter）调用。
-pub struct ApiKeyService {
-    repository: Arc<dyn ApiKeyRepository>,
-    crypto: Arc<dyn CryptoService>,
-}
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .setup(|app| {
+            // 1. 创建 SQLite 连接
+            let app_data_dir = app.path().app_data_dir().unwrap();
+            std::fs::create_dir_all(&app_data_dir).unwrap();
+            let db_path = app_data_dir.join("easy_agent.db");
+            let conn = Arc::new(Connection::open(&db_path).unwrap());
 
-#[derive(Debug, Error)]
-pub enum ApiKeyServiceError {
-    #[error("Repository error: {0}")]
-    RepoError(#[from] RepoError),
+            // 2. 初始化表
+            let repo_adapter = SqliteApikeyRepositoryOutputAdapter::new(conn.clone());
+            repo_adapter.init_table().unwrap();
 
-    #[error("Crypto error: {0}")]
-    CryptoError(String),
+            // 3. 创建 OutputAdapter（实现 OutputPort）
+            let crypto_adapter = Arc::new(
+                AesCryptoOutputAdapter::from_env()
+                    .expect("Missing API_KEY_ENCRYPTION_KEY")
+            );
+            let repo_adapter = Arc::new(repo_adapter);
 
-    #[error("ApiKey not found: {0}")]
-    NotFound(String),
+            // 4. 创建 Application（实现 InputPort）
+            let application = Arc::new(ApikeyApplication::new(
+                repo_adapter.clone() as Arc<dyn ApikeyRepositoryOutputPort>,
+                crypto_adapter.clone() as Arc<dyn CryptoServiceOutputPort>,
+            ));
 
-    #[error("Invalid input: {0}")]
-    InvalidInput(String),
-}
+            // 5. 注册到 Tauri state（InputPort 接口）
+            app.manage(application as Arc<dyn ApikeyInputPort>);
 
-impl ApiKeyService {
-    pub fn new(
-        repository: Arc<dyn ApiKeyRepository>,
-        crypto: Arc<dyn CryptoService>,
-    ) -> Self {
-        Self { repository, crypto }
-    }
-
-    /// 创建新的 API Key
-    pub async fn create(&self, dto: CreateApiKeyDto) -> Result<ApiKeyResponseDto, ApiKeyServiceError> {
-        // 1. 加密明文 Key
-        let encrypted_key = self.crypto
-            .encrypt(&dto.api_key)
-            .map_err(ApiKeyServiceError::CryptoError)?;
-
-        // 2. 构建实体
-        let mut apikey = ApiKey::new(
-            dto.name,
-            encrypted_key,
-            dto.provider,
-            dto.model,
-        );
-        apikey.set_base_url(dto.base_url);
-
-        // 3. 持久化
-        self.repository
-            .save(&apikey)
-            .await?;
-
-        Ok(ApiKeyResponseDto::from(&apikey))
-    }
-
-    /// 根据 ID 查询
-    pub async fn find_by_id(&self, id: &str) -> Result<Option<ApiKeyResponseDto>, ApiKeyServiceError> {
-        let apikey = self.repository
-            .find_by_id(&ApiKeyId::from_string(id.to_string()))
-            .await?
-            .ok_or_else(|| ApiKeyServiceError::NotFound(id.to_string()))?;
-
-        Ok(Some(ApiKeyResponseDto::from(&apikey)))
-    }
-
-    /// 查询所有
-    pub async fn find_all(&self) -> Result<Vec<ApiKeyResponseDto>, ApiKeyServiceError> {
-        let apikeys = self.repository.find_all().await?;
-        Ok(apikeys.iter().map(ApiKeyResponseDto::from).collect())
-    }
-
-    /// 更新 API Key
-    pub async fn update(&self, id: &str, dto: UpdateApiKeyDto) -> Result<ApiKeyResponseDto, ApiKeyServiceError> {
-        let mut apikey = self.repository
-            .find_by_id(&ApiKeyId::from_string(id.to_string()))
-            .await?
-            .ok_or_else(|| ApiKeyServiceError::NotFound(id.to_string()))?;
-
-        if let Some(name) = dto.name {
-            apikey.name = name;
-            apikey.updated_at = chrono::Utc::now();
-        }
-
-        if let Some(model) = dto.model {
-            apikey.update_model(model);
-        }
-
-        if let Some(base_url) = dto.base_url {
-            apikey.set_base_url(Some(base_url));
-        }
-
-        if let Some(status) = dto.status {
-            match status {
-                KeyStatus::Active => apikey.activate(),
-                KeyStatus::Inactive => apikey.deactivate(),
-                KeyStatus::Expired => apikey.mark_expired(),
-            }
-        }
-
-        if let Some(api_key) = dto.api_key {
-            let encrypted_key = self.crypto
-                .encrypt(&api_key)
-                .map_err(ApiKeyServiceError::CryptoError)?;
-            apikey.update_key(encrypted_key);
-        }
-
-        self.repository.save(&apikey).await?;
-        Ok(ApiKeyResponseDto::from(&apikey))
-    }
-
-    /// 删除 API Key
-    pub async fn delete(&self, id: &str) -> Result<(), ApiKeyServiceError> {
-        self.repository
-            .delete(&ApiKeyId::from_string(id.to_string()))
-            .await?;
-        Ok(())
-    }
-
-    /// 验证 API Key 有效性
-    pub async fn verify(&self, id: &str) -> Result<bool, ApiKeyServiceError> {
-        let apikey = self.repository
-            .find_by_id(&ApiKeyId::from_string(id.to_string()))
-            .await?
-            .ok_or_else(|| ApiKeyServiceError::NotFound(id.to_string()))?;
-
-        self.crypto.verify(&apikey).await
-            .map_err(|e| ApiKeyServiceError::CryptoError(e.to_string()))
-    }
-
-    /// 获取可用的默认 Key
-    pub async fn get_default(&self) -> Result<Option<ApiKeyResponseDto>, ApiKeyServiceError> {
-        let apikey = self.repository.find_default().await?;
-        Ok(apikey.map(|ak| ApiKeyResponseDto::from(&ak)))
-    }
-
-    /// 记录 Key 使用（更新 last_used_at）
-    pub async fn record_usage(&self, id: &str) -> Result<(), ApiKeyServiceError> {
-        let mut apikey = self.repository
-            .find_by_id(&ApiKeyId::from_string(id.to_string()))
-            .await?
-            .ok_or_else(|| ApiKeyServiceError::NotFound(id.to_string()))?;
-
-        apikey.record_usage();
-        self.repository.save(&apikey).await?;
-        Ok(())
-    }
+            Ok(())
+        })
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
+            apikey_create,
+            apikey_list,
+            apikey_get,
+            apikey_update,
+            apikey_delete,
+            apikey_verify,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }
 ```
 
-### 5.3 模块入口（mod.rs）
-
-```rust
-// src-tauri/src/domain/apikey/mod.rs
-
-pub mod entity;
-pub mod port;
-pub mod adapter;
-pub mod application;
-
-// 重新导出主要类型，方便上层调用
-pub use entity::{ApiKey, ApiKeyId, LlmProvider, KeyStatus};
-pub use port::repository::ApiKeyRepository;
-pub use port::service::CryptoService;
-pub use application::apikey_service::ApiKeyService;
-pub use application::dto::{CreateApiKeyDto, UpdateApiKeyDto, ApiKeyResponseDto};
-```
-
-## 6. 六边形架构全貌
+## 7. 六边形架构全貌
 
 ```
-                        ┌─────────────────────────────────────────────┐
-                        │              Driving Adapter                  │
-                        │  (Tauri Commands / HTTP API / IPC)          │
-                        └────────────────────┬────────────────────────┘
-                                             │
-                                             ▼
-                        ┌─────────────────────────────────────────────┐
-                        │              Application                     │
-                        │          ApiKeyService                       │
-                        │  • 编排业务逻辑  • DTO 转换                  │
-                        └────────────────────┬────────────────────────┘
-                                             │
-                         ┌───────────────────┴───────────────────┐
-                         │           Port（端口）                 │
-                         │  ApiKeyRepository   CryptoService    │
-                         └───────────────────┬───────────────────┘
-                                             │
-                        ┌────────────────────┴────────────────────┐
-                        │             Adapter（适配器）             │
-                        │  SqliteApiKeyRepository  AesCrypto      │
-                        └────────────────────┬────────────────────┘
-                                             │
-                        ┌────────────────────┴────────────────────┐
-                        │           Driven Adapter                   │
-                        │  (SQLite Database  /  OS / External API)  │
-                        └───────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│              Infra（基础设施层）                              │
+│  ┌─────────────────────┐       ┌─────────────────────────┐  │
+│  │  ApikeyInputAdapter │       │  ApikeyOutputAdapter    │  │
+│  │  (实现 InputPort)   │       │  (实现 OutputPort)      │  │
+│  │  Tauri Commands     │       │  Sqlite + AES + HTTP    │  │
+│  └──────────┬──────────┘       └───────────┬─────────────┘  │
+└─────────────┼─────────────────────────────┼─────────────────┘
+              │                             │
+              ▼                             ▼
+┌─────────────────────────────────────────────────────────────┐
+│              Application（应用层）                           │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │            ApikeyApplication                          │  │
+│  │  实现 InputPort  │  编排 OutputPort（依赖倒置注入）      │  │
+│  └──────────────────────────────────────────────────────┘  │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│              Domain（领域层）                                 │
+│  ┌──────────────┐  ┌───────────────┐  ┌───────────────┐   │
+│  │ ApikeyEntity │  │ ApikeyInputPort│  │ApikeyOutputPort│  │
+│  │  （实体）     │  │（接口，外部调用）│  │（接口，外部依赖）│  │
+│  └──────────────┘  └───────────────┘  └───────────────┘   │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### 依赖方向（依赖倒置）
+### 依赖方向
 
-- **Application** 依赖 **Port**（接口），不依赖具体实现
-- **Adapter** 实现 **Port**（接口），注入到 Application
-- **Entity** 被所有层引用，但不含外部依赖（纯净领域模型）
+- **ApikeyApplication** 实现 **ApikeyInputPort**（被 InputAdapter 调用）
+- **ApikeyApplication** 依赖 **ApikeyOutputPort**（由 OutputAdapter 注入）
+- **ApikeyEntity** 纯净无外部依赖
+- **ApikeyInputAdapter** 调用 **ApikeyInputPort**（Tauri → 核心）
+- **ApikeyOutputAdapter** 实现 **ApikeyOutputPort**（外部 → 核心）
