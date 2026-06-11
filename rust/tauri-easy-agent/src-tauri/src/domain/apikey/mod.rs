@@ -1,10 +1,10 @@
 pub mod ApikeyEntity;
-pub mod ApikeyInputPort;
-pub mod ApikeyOutputPort;
+pub mod ApikeyInputTrait;
+pub mod ApikeyOutputTrait;
 
 pub use ApikeyEntity::{ApiKey, ApiKeyId, KeyStatus, LlmProvider};
-pub use ApikeyInputPort::{ApikeyInputPort, ApikeyInputError};
-pub use ApikeyOutputPort::{
+pub use ApikeyInputTrait::{ApikeyInputPort, ApikeyInputError};
+pub use ApikeyOutputTrait::{
     ApikeyRepositoryOutputPort, ApikeyRepoError,
     CryptoServiceOutputPort, CryptoError, VerifyError,
 };
