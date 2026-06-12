@@ -5,12 +5,12 @@ import "openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
 
 contract FaucetToken is ERC20{
     uint256 public constant CLAIM_AMOUNT=100*10**18;
-    uint256 public constant MAX_CLAIMS=100;
+    uint256 public constant MAX_CLAIMS=1000;
     uint256 public claimedCount;
     mapping(address=>bool) public claimed;
 
     constructor() ERC20("Faucet Token","FCT"){
-        _mint(msg.sender,1_000_000*10**decimals());
+        _mint(address(this),1_000_000*10**decimals());
     }
 
     function claim() external {

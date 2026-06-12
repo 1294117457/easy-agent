@@ -1,0 +1,3 @@
+[submodule "web3/docs/step1/1little demo/03-VendingMachine/vending-machine/lib/openzeppelin-contracts"]
+	path = web3/docs/step1/1little demo/03-VendingMachine/vending-machine/lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts
