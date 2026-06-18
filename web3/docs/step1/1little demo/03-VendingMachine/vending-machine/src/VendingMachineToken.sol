@@ -6,20 +6,27 @@ import "openzeppelin-contracts/contracts/access/Ownable.sol";
 import "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 
 contract VendingMachineToken is ERC20 ,Ownable{
+  receive() external payable{}
+
   uint256 public constant RATE = 1000;
   constructor(address initialOwner) Ownable(initialOwner) ERC20("VendingToken","VTK"){}
-
+/**
+ * _mint,_transfer,_burn基于ERC20的方法
+ * 然后实现铸造Token，存ETH获取token,销毁token获取ETH
+ * owner提取ETH，提取Token
+ */
   function mintToContract(uint256 amount) external onlyOwner{
     _mint(address(this),amount*10**decimals());
   }
 
-  function depositeETH() external payable{
+  function depositETH() external payable{
     require(msg.value>0,"Must send ETH");
     uint256 tokenAmount = msg.value*RATE;
     require(
       balanceOf(address(this))>=tokenAmount,
       "Contract does not have enough tokens"
     );
+    _transfer(address(this),msg.sender,tokenAmount);
   }
   
   function withdrawETH(uint256 tokenAmount) external{
@@ -44,4 +51,5 @@ contract VendingMachineToken is ERC20 ,Ownable{
   function withdrawTokensByOwner(uint256 amount) external onlyOwner{
     _transfer(address(this),owner(),amount);
   }
+
 }

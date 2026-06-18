@@ -3,11 +3,13 @@
 ## 阶段目标
 
 本阶段没有固定终点，核心目标是：
+
 1. **参与真实开源项目，融入 Web3 开发者社区**
 2. **掌握高级技术能力（形式化验证、MEV 等）**
 3. **形成自己的技术判断力和影响力**
 
 达成标志：
+
 - 为主流 Web3 项目贡献过代码或文档
 - 能用 Certora 完成基础的形式化验证
 - 能独立审计一个中等复杂度合约并输出报告
@@ -19,12 +21,14 @@
 
 ### 选择项目
 
-| 类型 | 推荐项目 | 参与难度 | 建议 |
-|---|---|---|---|
-| DeFi 协议 | Uniswap、Compound、Aave、SushiSwap | ★★★☆☆ | 主流项目，文档完善，适合练手 |
-| 基础设施 | OpenZeppelin、solmate、Foundry | ★★★☆☆ | 库和工具，参与方式多（代码/测试/文档） |
-| 安全工具 | Slither、Rarity、Echidna | ★★★★☆ | 技术深度高，适合进阶 |
-| 跨链协议 | LayerZero、Wormhole、Circle CCTP | ★★★★☆ | 跨链场景复杂，适合深入研究 |
+
+| 类型      | 推荐项目                            | 参与难度  | 建议                   |
+| ------- | ------------------------------- | ----- | -------------------- |
+| DeFi 协议 | Uniswap、Compound、Aave、SushiSwap | ★★★☆☆ | 主流项目，文档完善，适合练手       |
+| 基础设施    | OpenZeppelin、solmate、Foundry    | ★★★☆☆ | 库和工具，参与方式多（代码/测试/文档） |
+| 安全工具    | Slither、Rarity、Echidna          | ★★★★☆ | 技术深度高，适合进阶           |
+| 跨链协议    | LayerZero、Wormhole、Circle CCTP  | ★★★★☆ | 跨链场景复杂，适合深入研究        |
+
 
 ### 贡献方式
 
@@ -73,20 +77,24 @@ npm install -g certora-cli
 certoraRun Certora/GreaterThanRule --loop_iter 5
 ```
 
-| 学习路径 | 内容 |
-|---|---|
-| 基础 | 理解 `.spec` 文件语法、正确性规则（invariants） |
-| 进阶 | 学习 CVL（Certora Verification Language） |
-| 实战 | 用 Certora 验证一个 ERC20 代币的转账逻辑 |
-| 综合 | 验证 Aave V3 的流动性检查逻辑 |
+
+| 学习路径 | 内容                                    |
+| ---- | ------------------------------------- |
+| 基础   | 理解 `.spec` 文件语法、正确性规则（invariants）     |
+| 进阶   | 学习 CVL（Certora Verification Language） |
+| 实战   | 用 Certora 验证一个 ERC20 代币的转账逻辑          |
+| 综合   | 验证 Aave V3 的流动性检查逻辑                   |
+
 
 ### 资源推荐
 
-| 资源 | 说明 |
-|---|---|
-| [Certora 官方文档](https://docs.certora.com/) | 入门必读 |
-| [Certora Examples](https://github.com/Certora/examples) | 官方示例仓库 |
+
+| 资源                                                                             | 说明                |
+| ------------------------------------------------------------------------------ | ----------------- |
+| [Certora 官方文档](https://docs.certora.com/)                                      | 入门必读              |
+| [Certora Examples](https://github.com/Certora/examples)                        | 官方示例仓库            |
 | [Foundry + Certora 集成](https://github.com/FrankieIsLost/certora-forge-example) | 用 Forge 跑 Certora |
+
 
 ---
 
@@ -106,13 +114,15 @@ MEV = 矿工/验证者通过重新排序、插入、删除交易获得的利润
 
 ### 技术栈
 
-| 工具 | 用途 |
-|---|---|
-| Flashbots MEV-Boost | 将 MEV 收益返还给用户 |
-| Flashbots Protect | 保护交易免受 MEV 攻击 |
-| mev-inspect-py | 分析历史 MEV 交易 |
-| Tenderly | 模拟交易 + 调试 |
-| Foundry / Forge | 编写 Flashbots Bundles |
+
+| 工具                  | 用途                   |
+| ------------------- | -------------------- |
+| Flashbots MEV-Boost | 将 MEV 收益返还给用户        |
+| Flashbots Protect   | 保护交易免受 MEV 攻击        |
+| mev-inspect-py      | 分析历史 MEV 交易          |
+| Tenderly            | 模拟交易 + 调试            |
+| Foundry / Forge     | 编写 Flashbots Bundles |
+
 
 ### 学习路径
 
@@ -129,21 +139,25 @@ MEV = 矿工/验证者通过重新排序、插入、删除交易获得的利润
 
 ### 核心概念
 
-| 技术 | 说明 |
-|---|---|
-| 跨链桥 | 将资产从一个链转移到另一个链 |
-| 跨链消息传递 | 在一条链上触发另一条链的操作 |
-| 轻客户端 | 验证另一条链的状态，无需运行全节点 |
+
+| 技术     | 说明                |
+| ------ | ----------------- |
+| 跨链桥    | 将资产从一个链转移到另一个链    |
+| 跨链消息传递 | 在一条链上触发另一条链的操作    |
+| 轻客户端   | 验证另一条链的状态，无需运行全节点 |
+
 
 ### 主流协议
 
-| 协议 | 类型 | 推荐学习理由 |
-|---|---|---|
-| LayerZero | 全链互操作 | 架构清晰，应用广泛 |
-| Wormhole | 跨链消息 | Guardian 验证机制值得研究 |
-| CCIP | 跨链互操作 | ChainLink 出品，安全优先 |
-| Hyperlane |  sovereign跨链 | 模块化设计，适合学习 |
-| Circle CCTP | 资产跨链 | 专注 USDC 跨链，机制简单 |
+
+| 协议          | 类型          | 推荐学习理由            |
+| ----------- | ----------- | ----------------- |
+| LayerZero   | 全链互操作       | 架构清晰，应用广泛         |
+| Wormhole    | 跨链消息        | Guardian 验证机制值得研究 |
+| CCIP        | 跨链互操作       | ChainLink 出品，安全优先 |
+| Hyperlane   | sovereign跨链 | 模块化设计，适合学习        |
+| Circle CCTP | 资产跨链        | 专注 USDC 跨链，机制简单   |
+
 
 ---
 
@@ -187,3 +201,4 @@ web3/docs/
     ├── 02-形式化验证-Certora.md  ← Certora 入门
     └── 03-MEV与跨链.md           ← MEV 与跨链技术
 ```
+

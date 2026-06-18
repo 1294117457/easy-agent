@@ -115,11 +115,181 @@ FaucetTokenTest中
 
 ##### 4.step1-demo3
 
+address(this).balance/balanceOf(address(this))
+
 ```
 ERC20，
 	里面是有一个_balances记录了token，
 	核心在_update的时候修改，然后_mint,_burn,_transfer都是基于这个
 
 balanceOf在此基础上读取_balances的值
+```
+
+Ownable
+
+```
+核心围绕address private _owner
+	_transferOwnership,将_owner更换成新值
+		constructor,renounceOwnership,transferOwnership都是基于_transferOnwership
+	owner()，就是返回_owner
+		_checkOwner就是基于owner()是否等于msg.sender
+```
+
+ReentrancyGuard
+
+```
+基于 _status,实现
+	进入前检查
+	进入后标记
+	退出后恢复
+```
+
+```
+额外
+	1 ether等于10**18wei
+
+转账
+	(bool success,)=recipient.call{value:1 ether}("");
+	//调用对方合约方法
+	(bool success,bytes memory data)=recipient.call{value:1 ether}("foo(uint256)",123);
+```
+
+```
+EOA
+	Externally Owned Account，
+	外部账户，没有代码，不能执行逻辑，不响应call，
+	被动接收ETH
+CA
+	Contract Account
+	合约账户，有代码，有函数，有状态
+账户通用属性
+	nonce
+	balance
+	codeHash
+	storageRoot
+receive()
+	Contract需要接收ETH时必须声明receive，
+	比如receive payable external()
+```
+
+```
+payable
+自定义方法
+	deposit方法声明了payable，
+	比如function deposit ()external payable{}
+	然后调用这个方法就是需要转入eth，
+	调用contract.deposit{value:1 ether}
+call/receive
+	1.call{value: 1 ether}(""),调用receive()，不能携带参数
+	2.call{value: 1 ether}(abi.encodeWithSignature("foo()")),调用foo()
+	3.contract.deposit{value: 1 ether}(),调用deposit
+```
+
+```
+部署
+forge create --broadcast  
+--rpc-url $SEPOLIA_RPC_URL              
+--private-key $PRIVATE_KEY              src/VendingMachineToken.sol:VendingMachineToken              
+--constructor-args $DEPLOYER_ADDRESS
+
+Deployer: 0x22082139749383146C76cFDBf4F54291cE023cd1
+Deployed to: 0x23d18a812439aBfF47553325915e32C1E082a622
+Transaction hash: 0x9ac5f277b1a403f6b6200f398797e593a17b28bcfb47ed52a5d9efe4f3170701 
+
+调用
+cast send <CONTRACT_ADDRESS> "mintToContract(uint256)" 100000 \
+    --private-key $PRIVATE_KEY --rpc-url $SEPOLIA_RPC_URL
+```
+
+
+
+#### DOS攻击
+
+```
+ReentrancyGuard，CEI，Pull
+```
+
+```
+也就是说，
+	push，pull实际对balance，pending，合约总ETH的影响效果是一样的，
+
+区别在于
+	push只有一个withdraw操作，攻击者给出大量高价gas的withdraw，导致其他人的withdraw卡住
+
+	pull则requestWithdraw不是转账操作，先记录用户已经操作了，
+	后续用户在合适的时候pull就好，
+	等于用户的买入卖出操作不被攻击者影响，只是用户实际提取ETH的操作额在合适时间进行就好了
+```
+
+```
+// 这就是你理解的“买入卖出操作不被影响”
+function requestWithdraw(uint amount) external {
+    // 1. 即使现在网络拥堵，这一步也绝对安全，因为没有任何外部调用
+    balances[msg.sender] -= amount;
+    pendingWithdrawals[msg.sender] += amount;
+}
+
+// 这就是你理解的“用户合适的时候pull就好”
+function claimWithdraw() external {
+    uint amount = pendingWithdrawals[msg.sender];
+    pendingWithdrawals[msg.sender] = 0;
+    // 2. 哪怕现在Gas费贵，或者攻击者捣乱，最坏的结果就是“这次领钱失败”
+    //    用户的资产依然安全地记录在 pending 里，下次再试就行
+    (bool success, ) = msg.sender.call{value: amount}("");
+    require(success);
+}
+```
+
+##### step1-demo4
+
+```
+string/bytes/bytes1...32
+	知道明确长度的二进制值 → bytes1 到 bytes32
+	不知道明确长度的二进制数据 → bytes
+	文本数据 → string
+	
+┌─────────────────────────────┐
+│   需要存储什么数据？          │
+└─────────────────────────────┘
+            │
+            ▼
+    ┌───────────────┐
+    │ 是文本吗？     │
+    └───────────────┘
+       │        │
+      YES       NO
+       │        │
+       ▼        ▼
+   string    ┌───────────────┐
+             │ 长度固定吗？   │
+             └───────────────┘
+                │        │
+               YES       NO
+                │        │
+                ▼        ▼
+            bytesN     bytes
+```
+
+```
+存储空间
+	calldata/memory，stack，storage
+	public ,external,private,internal
+
+1.状态变量都存储在 storage 中
+2.基本类型无论入参还是局部变量都是 stack
+3.方法的入参
+	external	calldata 或 memory
+    public		memory 或 calldata
+    internal / private	memory、storage、calldata
+不能用的组合：
+	external/public 的入参不能用 storage，因为外部调用者没法直接传一个 storage 引用。
+返回值交给调用者，不能是storage或calldata
+```
+
+```
+design philosophy of solodity 
+	type transfer no in solidity,in frontend
+            
+    board.post(string.concat("Msg ",vm.toString(i)));
 ```
 
